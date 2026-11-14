@@ -63,7 +63,7 @@ begin
 end
 
 # ╔═╡ 4089f088-e764-435c-96a2-65ec6fc91dab
-md"**Worm data**: the average activity of AVB and of AVA and AVE (z-scored, the CTRNN's two nodes) and the velocity of worm 2023-01-23-15, first 240 s, shaded by behaviour."
+md"**Worm data**: AVB and AVE activity (z-scored, left and right averaged) and velocity of worm 2023-01-23-15, first 240 s, shaded by behaviour."
 
 # ╔═╡ 04c50f2b-27bd-4235-9c05-305b890fd035
 begin
@@ -75,13 +75,13 @@ begin
     shown = 1:min(round(Int, 240 / worm.dt), length(worm_frames))
     data_t = (shown .- 1) .* worm.dt
     data_activity = permutedims(hcat(cluster_activity(worm, COMMAND_CLASSES.forward, worm_frames)[shown],
-        cluster_activity(worm, COMMAND_CLASSES.reverse, worm_frames)[shown]))
+        cluster_activity(worm, ["AVE"], worm_frames)[shown]))
     data_velocity = worm.behavior["velocity"][worm_frames[shown]]
     data_states = [v > PAUSE_SPEED ? :forward : v < -PAUSE_SPEED ? :reversal : :pause for v in data_velocity]
 end
 
 # ╔═╡ f5be20db-06f2-4621-839b-5e16da076ca8
-data_plot = behavior_figure(data_t, data_activity, data_velocity; trace_labels=["AVB", "AVA + AVE"],
+data_plot = behavior_figure(data_t, data_activity, data_velocity; trace_labels=["AVB", "AVE"],
     trace_colors=[FORWARD, "#eda100"], activity_states=data_states)
 
 # ╔═╡ 6d03b3eb-5dd1-47c1-a099-ebc4cfd65111
