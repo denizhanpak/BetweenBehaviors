@@ -1,5 +1,0 @@
-# 4-state heteroclinic GLV (Horchler construction, β = ν = 1), α refit for additive noise 0.1 on u (FittedModel.jl).
-# Euler–Maruyama dt = 0.0016683350016683351 s, sampled at 29.97 Hz; seeds 1001:1064, each 2000.0 s after 20.0 s.
-# Objective Σ log(mean dwell / DATA_DWELL.mean)² = 5.5854423655376416e-5, 66 generations of CMA-ES; fitted 2026-10-07.
-# α: Forward, Pause 1, Reverse, Pause 2
-0.5789603564403176 7.486003342667031 1.3852596336950647 17.05699412601234

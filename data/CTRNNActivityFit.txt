@@ -1,0 +1,4 @@
+# 2-node CTRNN fitted to the activity statistics of AVB (node 1) and AVA+AVE (node 2), 10 WormWideWeb recordings (FittedModels.ctrnn_activity_fit).
+# Losses by optimiser seed: 2: 20.761672992953038, 3: 12.513189027672375, 4: 24.730272280325206, 5: 13.359222257486831; fitted 2026-11-13.
+# Genome: W_FF W_RF W_FR W_RR (column-major), θ_F θ_R, log τ_F log τ_R (s), log noise_F log noise_R
+6.831305391339947 -4.820950484097631 2.821731078045523 6.705888216667034 -4.91728915576405 -1.6232555563922635 1.4950453680241798 1.3100669859717589 1.0648899800796283 0.21321148985349603

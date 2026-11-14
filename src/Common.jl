@@ -6,37 +6,34 @@ What all three notebooks share:
 - model-independent tools on BifurcationKit, the SciML stack and DynamicalSystems.jl: runs,
   equilibria, invariant manifolds, limit cycles, two-parameter bifurcation charts, complex
   "ghost" equilibria, and their plots;
-- the pieces of the models: the logistic σ and the CTRNN field, the data's dwell times and the
-  fitness the fits score against them, and Horchler et al.'s 4-state heteroclinic network
-  (Forward → Pause 1 → Reverse → Pause 2).
+- the pieces of the models: the logistic σ and the CTRNN field, and Horchler et al.'s 4-state
+  heteroclinic network (Forward → Pause 1 → Reverse → Pause 2).
 """
 module Common
 
 using BifurcationKit
 const BK = BifurcationKit
 using SciMLBase: ODEProblem, SDEProblem, NonlinearProblem, NonlinearFunction, DiscreteCallback,
-    VectorContinuousCallback, CallbackSet, terminate!, successful_retcode, solve
+    terminate!, successful_retcode, solve
 using OrdinaryDiffEqTsit5: Tsit5
 using StochasticDiffEq: EM
 using DiffEqNoiseProcess: WienerProcess
 using StaticArrays: SVector, SMatrix
 using DynamicalSystemsBase: CoupledODEs
 using ChaosTools: fixedpoints, interval, estimate_period
-using StatsBase: rle
 using NonlinearSolve: NewtonRaphson
 using Plots
 using LinearAlgebra
 using Base.CoreLogging: with_logger, NullLogger
 using Random
 
-export VectorField, ODE_TOL, trajectory, sde_trajectory, crossings, bouts
+export VectorField, ODE_TOL, trajectory, sde_trajectory
 export find_equilibria, classify, saddle_value, is_symmetric
 export saddle_manifolds, manifold_surface, limit_cycle, speed_minima
 export continue_equilibria, bifurcation_chart, complex_equilibrium, cyclic_complex_equilibria
 export STABILITY_MARKERS, CYCLE_COLOR, draw_equilibria!, draw_path!, mesh_lines, phase_figure
 export σ, dσ, ctrnn_system
-export DATA_DWELL, mean_bout_lengths, dwell_scores, dwell_fitness
-export squared_glv_rates, horchler_parameters, HORCHLER_FIT
+export squared_glv_rates, horchler_parameters
 
 # ══ Dynamical-systems tools ════════════════════════════════════════════════════════════
 
@@ -101,25 +98,6 @@ function sde_trajectory(rates, p, y0, duration; noise, dt, seed=nothing, rng=Xos
     sol = solve(problem, EM(); dt, saveat=transient:saveat:duration)
     return (; t=sol.t, Y=reduce(hcat, sol.u))
 end
-
-"""
-    crossings(vf, p, y0, duration; levels, tol=ODE_TOL)
-
-Every time a variable of the run from `y0` crosses its level, `(; t, i, up)` in time order:
-y[i] crosses `levels[i]` at `t`, rising if `up`.
-"""
-function crossings(vf::VectorField, p, y0, duration; levels, tol=ODE_TOL)
-    found = NamedTuple{(:t, :i, :up),Tuple{Float64,Int,Bool}}[]
-    record!(integrator, flags) = foreach(i -> push!(found, (t=integrator.t, i, up=flags[i] > 0)), findall(!iszero, flags))
-    events = VectorContinuousCallback((out, y, t, integrator) -> (out .= y .- levels), record!, dimension(vf);
-        save_positions=(false, false))
-    solve(ode_problem(vf, y0, (0.0, duration), p), Tsit5(); callback=CallbackSet(events, leave_box(vf)),
-        save_everystep=false, tol...)
-    return found
-end
-
-"""Run-length encoding as one `(; label, length)` per run of equal labels (the dwell bouts)."""
-bouts(labels) = [(; label, length) for (label, length) in zip(rle(labels)...)]
 
 # ── Equilibria ──────────────────────────────────────────────────────────────────────────
 
@@ -407,7 +385,7 @@ function phase_figure(cyc, distances, labels, colors; ylabel, title)
     return fig
 end
 
-# ══ Model pieces: σ, the CTRNN field, dwell times and Horchler's network ═══════════════
+# ══ Model pieces: σ, the CTRNN field and Horchler's network ═════════════════════════════
 
 """Logistic σ(x) = 1 / (1 + e⁻ˣ); `dσ` is its derivative σ(1 − σ)."""
 σ(x) = 1 / (1 + exp(-x))
@@ -425,33 +403,6 @@ function ctrnn_system(weights; bias=p -> 0, tau=p -> 1)
     return f!, jacobian
 end
 
-"""The data's mean dwell time in each behaviour (s), in the order of the locomotion cycle."""
-const DATA_DWELL = (names=["Forward", "Pause 1", "Reverse", "Pause 2"], mean=[5.329, 0.441, 1.945, 0.208])
-
-"""Mean length of the bouts `runs` (`(; label, length)`) of each label 1:n; 0 for a label that never occurs."""
-mean_bout_lengths(runs, n) = [
-    (lengths = [r.length for r in runs if r.label == i]; isempty(lengths) ? 0.0 : sum(lengths) / length(lengths))
-    for i in 1:n
-]
-
-"""
-    dwell_scores(runs, target; timing)
-
-How well bouts `runs` follow the cycle 1 → 2 → … → n → 1 with mean dwell times `target`: the
-fraction of hand-overs to the next label (`order`), `timing(mean_bout, target)` and the fraction
-of labels that occur (`balance`).
-"""
-function dwell_scores(runs, target; timing)
-    n = length(target)
-    handovers = zip(runs[1:end-1], runs[2:end])
-    order = isempty(handovers) ? 0.0 : count(((a, b),) -> b.label == mod1(a.label + 1, n), handovers) / length(handovers)
-    mean_bout = mean_bout_lengths(runs, n)
-    return (; order, timing=timing(mean_bout, target), balance=count(>(0), mean_bout) / n)
-end
-
-"""The fitness the fits maximise: 2 order + 5 timing + 0.5 balance, at most 7.5."""
-dwell_fitness(s) = 2 * s.order + 5 * s.timing + 0.5 * s.balance
-
 """
     horchler_parameters(α)
 
@@ -467,8 +418,5 @@ end
 """u̇ = u ⊙ (α − ρ u²), Horchler's network in u (activities x = u²), at a tuple and as a tuple."""
 squared_glv_rates(u::NTuple{N}, q) where {N} =
     ntuple(i -> u[i] * (q.α[i] - sum(q.ρ[i, j] * u[j]^2 for j in 1:N)), Val(N))
-
-"""The rates α fitted for noise 0.01 (`HorchlerParameters4StateGLV.jl`), the start of the refit."""
-const HORCHLER_FIT = (α=[0.937797, 14.4316, 2.85567, 32.5532], noise=0.01)
 
 end # module

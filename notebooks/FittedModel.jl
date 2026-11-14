@@ -17,7 +17,7 @@ begin
     using DynamicalSystemsBase: DynamicalSystemsBase
     using ChaosTools: ChaosTools
     using Attractors: Attractors
-    using StatsBase: rle
+    using StatsBase: StatsBase
     using Plots
     using LinearAlgebra
     using Random
@@ -37,138 +37,144 @@ end
 md"""
 # Worm data and fitted models
 
-A worm's recorded activity and velocity (WormWideWeb, Atanas, Kim et al. 2023), and two
-models fitted to the mean dwell times of Roberts et al. (2016): a 2-node CTRNN and a 4-state
-heteroclinic network (generalized Lotka–Volterra, Horchler's construction), each run with noise.
-The fitted parameters are read from `data/`; `refit = true` below reruns both fits (CMA-ES,
-hours) and overwrites those files. The WormWideWeb recordings (~0.5 GB) are downloaded to
-`data/wormwideweb` on the first run. The last cell saves the figures to `figures/`.
+The WormWideWeb recordings (Atanas, Kim et al. 2023) and two models fitted to them, each run
+with noise:
+
+- a 2-node CTRNN whose nodes are the forward command neurons (AVB) and the reverse ones (AVA and
+  AVE, averaged), fitted to the statistics of their activity (distribution, auto- and
+  cross-correlation, time above and below the mean), among networks that oscillate without noise;
+- a 4-state heteroclinic network (generalized Lotka–Volterra, Horchler's construction) fitted to
+  the worms' mean dwell times in Forward → Pause 1 → Reverse → Pause 2, read from their velocity.
+
+Recordings with a heat stimulus are used up to the first heat pulse. The fitted parameters are
+read from `data/`; `refit = true` below reruns both fits (CMA-ES, a few hours) and overwrites those
+files. The recordings (~0.5 GB) are downloaded to `data/wormwideweb` on the first run. The last
+cell saves the figures to `figures/`.
 """
 
 # ╔═╡ 2d976b02-0f04-4b06-9dbe-6bb53ca2a8d5
 begin
-    noise = 0.1            # on the heteroclinic network's u; the CTRNN's is matched to it
-    rate = 29.97           # samples per second, Roberts et al.'s video frame rate
-    dt = 1 / (20 * rate)   # Euler–Maruyama step: 20 steps per sample
-    transient = 20.0       # s dropped at the start of every run
-    duration = 2000.0      # s kept
+    noise = 0.1                 # additive noise on the heteroclinic network's u
+    glv_dt = 1 / (20 * 29.97)   # the heteroclinic network's Euler–Maruyama step (s), as in its fit
+    transient = 20.0            # s dropped at the start of every heteroclinic run
+    duration = 2000.0           # s kept, every run of either model
+    run_seeds = 1:10
     data_dir = joinpath(@__DIR__, "..", "data")
-
-    # Dwell times over several runs, each a state per sample (1 Forward, 2 Pause 1, 3 Reverse,
-    # 4 Pause 2): every bout but each run's first and last, in s. The mean and SD per state,
-    # the number of bouts, and the fraction of hand-overs that go to the next state.
-    function dwell_times(state_series)
-        runs = [bouts(states)[2:end-1] for states in state_series]
-        lengths = [[b.length / rate for r in runs for b in r if b.label == i] for i in 1:4]
-        order = mean(dwell_scores(r, DATA_DWELL.mean; timing=log_timing).order for r in runs)
-        return (; mean=mean.(lengths), sd=std.(lengths), bouts=length.(lengths), order)
-    end
 end
 
 # ╔═╡ 4089f088-e764-435c-96a2-65ec6fc91dab
-md"**Worm data**: AVB and AVE activity (z-scored) and velocity of worm 2023-01-23-15, first 240 s, shaded by behaviour."
+md"**Worm data**: the average activity of AVB and of AVA and AVE (z-scored, the CTRNN's two nodes) and the velocity of worm 2023-01-23-15, first 240 s, shaded by behaviour."
 
 # ╔═╡ 04c50f2b-27bd-4235-9c05-305b890fd035
 begin
     paper_dir = download_paper("atanas_kim_2023", joinpath(data_dir, "wormwideweb"))
     all_recordings = load_dataset.(dataset_files(paper_dir))
-    pause_speed = 0.02
     worm = only(filter(r -> r.uid == "2023-01-23-15", all_recordings))
 
-    # One neuron class's activity in a recording: its labeled rows (no "?"; the surer row of a
-    # repeated label), left and right averaged, z-scored over the whole recording.
-    function zscored_activity(recording, name)
-        row_of = Dict(l.label => row for (row, l) in sort(collect(recording.labels); by=p -> p.second.confidence)
-                      if !occursin('?', l.label))
-        rows = [row for (label, row) in row_of if (recording.labels[row].lr in ("L", "R") ? chop(label) : label) == name]
-        x = vec(mean(recording.traces[rows, :]; dims=1))
-        return (x .- mean(x)) ./ std(x)
-    end
-
-    shown = 1:min(round(Int, 240 / worm.dt), length(worm.behavior["velocity"]))
+    worm_frames = first(used_pieces(worm))
+    shown = 1:min(round(Int, 240 / worm.dt), length(worm_frames))
     data_t = (shown .- 1) .* worm.dt
-    data_activity = permutedims(hcat(zscored_activity(worm, "AVB")[shown], zscored_activity(worm, "AVE")[shown]))
-    data_velocity = worm.behavior["velocity"][shown]
-    data_states = [v > pause_speed ? :forward : v < -pause_speed ? :reversal : :pause for v in data_velocity]
+    data_activity = permutedims(hcat(cluster_activity(worm, COMMAND_CLASSES.forward, worm_frames)[shown],
+        cluster_activity(worm, COMMAND_CLASSES.reverse, worm_frames)[shown]))
+    data_velocity = worm.behavior["velocity"][worm_frames[shown]]
+    data_states = [v > PAUSE_SPEED ? :forward : v < -PAUSE_SPEED ? :reversal : :pause for v in data_velocity]
 end
 
 # ╔═╡ f5be20db-06f2-4621-839b-5e16da076ca8
-data_plot = behavior_figure(data_t, data_activity, data_velocity; trace_labels=["AVB", "AVE"],
+data_plot = behavior_figure(data_t, data_activity, data_velocity; trace_labels=["AVB", "AVA + AVE"],
     trace_colors=[FORWARD, "#eda100"], activity_states=data_states)
 
 # ╔═╡ 6d03b3eb-5dd1-47c1-a099-ebc4cfd65111
-md"**Fits.** The CTRNN is the fittest of the saved genomes; the heteroclinic network's rates α are fitted for noise 0.1. `refit = true` reruns both fits."
+md"""
+**Fits.** The CTRNN's target is the statistics of AVB and AVA + AVE in every recording with both
+labelled; the heteroclinic network's is the dwell times of all the recordings. `refit = true`
+reruns both fits. Below the fits, the CTRNN's statistics against its target (`off_by_spread`: the
+difference over the SD across recordings), the loss it minimises, and the period of its
+oscillation without noise.
+"""
 
 # ╔═╡ b3d8c802-0bbe-4520-818d-11787371a23f
 begin
     refit = false
-    ctrnn_fit_file = joinpath(data_dir, "CTRNN2NeuronOpt.txt")
-    refit && ctrnn_dwell_fit(ctrnn_fit_file)
-    net = dwell_fit_network(ctrnn_fit_file)
-    glv_α = horchler_dwell_fit(; dir=data_dir, noise, rate, dt, transient, duration, refit)
+    activity = activity_target(all_recordings)        # the CTRNN's target, sampled every activity.dt s
+    sample_dt = mean(r.dt for r in all_recordings)    # the worms' mean frame step (s)
+    worm_dwell = dwell_summary(reduce(vcat, [cycle_bouts(velocity_sequence(r.behavior["velocity"][p]), r.dt)
+                                             for r in all_recordings for p in used_pieces(r)]))
+
+    ctrnn_fit_file = joinpath(data_dir, "CTRNNActivityFit.txt")
+    refit && ctrnn_activity_fit(ctrnn_fit_file, activity)
+    net = read_ctrnn_fit(ctrnn_fit_file)
+
+    glv_settings = (; noise, sample_dt, dt=glv_dt, transient, duration)
+    glv_α = horchler_dwell_fit(; file=joinpath(data_dir, "HorchlerFitWWWNoise$(noise).txt"), target=worm_dwell.mean,
+        refit, glv_settings...)
 end
 
 # ╔═╡ 494e8988-0009-4aae-a925-368bb4820dc5
-begin
-    ctrnn_noise = ctrnn_matched_noise(noise, net; dt)   # one per state, matched to the network's `noise`
-    ctrnn_run(seed) = ctrnn_noisy_run(net, seed; noise=ctrnn_noise, rate, dt, transient, duration)
-    ctrnn_states(Y) = ctrnn_labels(Y, net)
-    ctrnn_noise_text = "noise ($(join(round.(ctrnn_noise; digits=2), ", ")))"
-
-    glv_run(seed) = horchler_noisy_run(glv_α, seed; noise, rate, dt, transient, duration)
-    glv_states(Y) = horchler_labels(Y)
-
-    roberts_run(seed) = roberts_model_run(roberts_rates(), seed; rate, transient, duration)
+ctrnn_check = let
+    stats = ctrnn_activity_stats(net, activity.dt)
+    (; loss=activity_loss(stats, activity), period=cycle_period(noise_free_cycle(net), net.θ),
+        stats=[(; name, worms=round(d; digits=2), ctrnn=round(m; digits=2), off_by_spread=round((m - d) / s; digits=2))
+               for (name, d, m, s) in zip(ACTIVITY_STAT_NAMES, activity.target, stats, activity.spread)])
 end
 
 # ╔═╡ a8a5e343-0eba-4f0c-a9af-072f04b19018
 # The worms' mean velocity in each state, which turns the heteroclinic network's states into a velocity.
-state_velocity = mean_state_velocities(filter(r -> !("heat" in r.types), all_recordings); pause_speed)
+state_velocity = mean_state_velocities(filter(r -> !("heat" in r.types), all_recordings); pause_speed=PAUSE_SPEED)
 
 # ╔═╡ 6ad12619-3740-4a47-992c-d4ae93f80c90
 begin
-    run_seeds = 1:10
-    ctrnn_runs = [ctrnn_run(seed) for seed in run_seeds]
-    glv_runs = [glv_run(seed) for seed in run_seeds]
-    ctrnn_dwell = dwell_times([ctrnn_states(r.Y) for r in ctrnn_runs])
-    glv_dwell = dwell_times([glv_states(r.Y) for r in glv_runs])
-    roberts_model_dwell = dwell_times([roberts_run(seed) for seed in run_seeds])
+    # Both models' runs, sampled like the worms: the CTRNN like the recordings it is fitted to, the
+    # heteroclinic network like all of them. The CTRNN's behaviour is read from its z-scored states
+    # as the worms' is from their command neurons (`neural_sequence`).
+    ctrnn_runs = [ctrnn_noisy_run(net, seed; sample_dt=activity.dt, duration) for seed in run_seeds]
+    glv_runs = [horchler_noisy_run(glv_α, seed; glv_settings...) for seed in run_seeds]
+    ctrnn_sequence(Y) = neural_sequence(zscore(Y[1, :]), zscore(Y[2, :]))
+    glv_sequence(Y) = label_sequence(horchler_labels(Y))
+    ctrnn_dwell = dwell_summary(reduce(vcat, [cycle_bouts(ctrnn_sequence(r.Y), activity.dt) for r in ctrnn_runs]))
+    glv_dwell = dwell_summary(reduce(vcat, [cycle_bouts(glv_sequence(r.Y), sample_dt) for r in glv_runs]))
+    ctrnn_noise_text = "noise ($(join(round.(net.noise; digits=2), ", ")))"
 end
 
 # ╔═╡ bc9f2269-d8c8-484d-b486-d92b23e74061
-md"**Fitted models**: the CTRNN's states (z-scored) and the heteroclinic network's velocity, first 240 s of seed 1, each shaded by its own model's behaviour."
+md"**Fitted models**: the CTRNN's states (z-scored), shaded by its behaviour read like the worms' command neurons, and the heteroclinic network's velocity, shaded by its state, first 240 s of seed 1."
 
 # ╔═╡ 734b7a0a-8669-46a6-933f-1c7cc526eca7
 model_plot = let
-    shade = [:forward, :pause, :reversal, :pause]   # Forward, Pause 1, Reverse, Pause 2
-    window = 1:round(Int, 240 * rate)+1
+    shade = Dict('F' => :forward, 'P' => :pause, 'R' => :reversal)
     c, g = first(ctrnn_runs), first(glv_runs)
-    Z = (c.Y .- mean(c.Y; dims=2)) ./ std(c.Y; dims=2)
+    ct, gt = c.t .- first(c.t), g.t .- first(g.t)
+    cw, gw = findall(<=(240), ct), findall(<=(240), gt)
+    Z = permutedims(hcat(zscore(c.Y[1, :]), zscore(c.Y[2, :])))
     v = state_velocity.forward .* g.Y[1, :] .^ 2 .+ state_velocity.reverse .* g.Y[3, :] .^ 2
-    behavior_figure((window .- 1) ./ rate, Z[:, window], v[window];
-        trace_labels=["Forward (≈ AVB)", "Reverse (≈ AVE)"], trace_colors=[FORWARD, "#eda100"],
-        activity_states=shade[ctrnn_states(c.Y[:, window])], velocity_states=shade[glv_states(g.Y[:, window])],
+    behavior_figure(ct[cw], Z[:, cw], v[gw]; velocity_t=gt[gw],
+        trace_labels=["Forward (AVB)", "Reverse (AVA, AVE)"], trace_colors=[FORWARD, "#eda100"],
+        activity_states=[shade[s] for s in ctrnn_sequence(c.Y)[cw]],
+        velocity_states=[shade[s] for s in glv_sequence(g.Y)[gw]],
         activity_ylabel="state y (z-score)",
         activity_title="2-node CTRNN, $ctrnn_noise_text",
         velocity_title="4-state GLV, noise $noise")
 end
 
 # ╔═╡ 742edc44-75f1-42ea-9c34-9e2de4c4ea8b
-md"**Dwell times** (mean ± SD) of the worms (Roberts et al.'s Table 1 means, SD from their raw tracks), their Markov model and the two fitted models, each over 10 runs of 2000 s."
+md"""
+**Dwell times** (mean ± SD) in Forward → Pause 1 → Reverse → Pause 2: the worms' read from their
+velocity (all recordings), and read from their command neurons (Forward when only AVB is above
+its mean, Reverse when only AVA + AVE is, a pause otherwise; the recordings with both labelled);
+the CTRNN's read from its two nodes the same way; and the heteroclinic network's, each model over
+10 runs of 2000 s. A pause between two runs in the same direction is merged into them.
+"""
 
 # ╔═╡ a7efc3d5-4218-4758-9ed6-c1e5b6f00ae7
-begin
-    # Every wild-type bout of Roberts et al. (2016), in video frames at 29.97 Hz (data/make_roberts_bouts.jl).
-    roberts_rows = split.(readlines(joinpath(data_dir, "roberts2016_bouts.csv"))[2:end], ",")
-    roberts_lengths = [[parse(Int, r[4]) / 29.97 for r in roberts_rows if r[3] == name] for name in DATA_DWELL.names]
-    roberts = (; mean=DATA_DWELL.mean, sd=std.(roberts_lengths))
-end
+worm_neural_dwell = dwell_summary(reduce(vcat, [
+    cycle_bouts(neural_sequence(cluster_activity(r, COMMAND_CLASSES.forward, p), cluster_activity(r, COMMAND_CLASSES.reverse, p)), r.dt)
+    for r in filter(has_command_neurons, all_recordings) for p in used_pieces(r)]))
 
 # ╔═╡ 3276b13a-0b41-4f89-8939-c84bc05f3ced
 dwell_plot = let
     systems = [
-        ("Roberts et al. 2016: Data", roberts, "#0b0b0b", :diamond),
-        ("Markov Model", roberts_model_dwell, "#c96a00", :utriangle),
+        ("Worms: velocity ($(length(all_recordings)) recordings)", worm_dwell, "#0b0b0b", :diamond),
+        ("Worms: AVB and AVA + AVE ($(activity.n) recordings)", worm_neural_dwell, "#c96a00", :utriangle),
         ("Neural Model, $ctrnn_noise_text", ctrnn_dwell, "#e87ba4", :rect),
         ("Behavioral Model, noise $noise", glv_dwell, CYCLE_COLOR, :circle),
     ]
@@ -176,8 +182,8 @@ dwell_plot = let
         markerstrokewidth=2)
     panels = map(1:4) do b
         top = 1.1 * maximum(d.mean[b] + d.sd[b] for (_, d) in systems)
-        panel = plot(; title=DATA_DWELL.names[b], titlefontsize=10,
-            xticks=(1:4, ["worms", "Roberts\nmodel", "CTRNN", "GLV"]), xlims=(0.4, 4.6), ylims=(0, top),
+        panel = plot(; title=CYCLE_STATES[b], titlefontsize=10,
+            xticks=(1:4, ["worms\nvelocity", "worms\nneurons", "CTRNN", "GLV"]), xlims=(0.4, 4.6), ylims=(0, top),
             legend=false, ylabel=(b == 1 ? "dwell time (s), mean ± SD" : ""))
         for (k, (_, d, color, shape)) in enumerate(systems)
             low, high = d.mean[b] - d.sd[b], d.mean[b] + d.sd[b]

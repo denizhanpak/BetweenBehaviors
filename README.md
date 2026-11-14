@@ -6,7 +6,7 @@ versions it was run with.
 
 | Notebook | Figures (`figures/`) |
 |---|---|
-| `notebooks/FittedModel.jl` | `exp_data` (a worm's recorded activity and velocity), `fitted_model` (time series of the fitted CTRNN and heteroclinic network), `fitted_dwell_times` (dwell times of the worms and the models) |
+| `notebooks/FittedModel.jl` | `exp_data` (a worm's forward and reverse command-neuron activity and its velocity), `fitted_model` (time series of the fitted CTRNN and heteroclinic network), `fitted_dwell_times` (dwell times of the worms and the models) |
 | `notebooks/SimpleModelGLV.jl` | the 3-node GLV: noisy and deterministic time series of the excitable and heteroclinic settings, basins of the excitable setting, the heteroclinic phase portrait, the bifurcation chart, the metastability heatmap with the bifurcation curves, and the saddle-value figure |
 | `notebooks/SimpleModelCTRNN.jl` | the 3-node CTRNN: noisy and deterministic time series of the excitable and limit-cycle settings, basins of the excitable setting, the bifurcation chart, the metastability heatmap with the bifurcation curves, the limit cycle with its ghosts, and its speed and distance from the ghosts |
 
@@ -28,23 +28,26 @@ noisy runs) take a few minutes on 8 threads; everything else takes seconds to a 
 - `src/`: the modules the notebooks `include`.
   - `Common.jl` (all three notebooks): the model-independent tools (equilibria by ChaosTools'
     interval root finding, manifolds, limit cycles, continuation with BifurcationKit, ghosts,
-    and noisy runs with StochasticDiffEq's Euler–Maruyama), plus the CTRNN field, the dwell-time
-    fitness and Horchler et al.'s heteroclinic network.
+    and noisy runs with StochasticDiffEq's Euler–Maruyama), plus the CTRNN field and Horchler et
+    al.'s heteroclinic network.
   - `SimpleModels.jl` (the two simple-model notebooks): the 3-node rings and their figures. The
     basins are computed by Attractors.jl and their boundaries drawn with Meshing.jl.
-  - `FittedModels.jl` (FittedModel): the fitted 2-node CTRNN, the dwell-time fits and
-    simulations, and the worm recordings.
-- `data/CTRNN2NeuronOpt.txt`: the 2-node CTRNN genomes fitted to the dwell times (CMA-ES).
-  The notebook uses the fittest.
-- `data/HorchlerFitNoise0.1.txt`: the heteroclinic network's rates fitted for noise 0.1 (CMA-ES).
-- `data/roberts2016_bouts.csv`: every wild-type bout of Roberts et al. (2016), in video frames
-  at 29.97 Hz, made by `data/make_roberts_bouts.jl` from their tracking data
-  ([Dryad, doi:10.5061/dryad.35qv6](https://doi.org/10.5061/dryad.35qv6), CC0).
+  - `FittedModels.jl` (FittedModel): the worm recordings and their command neurons, the
+    locomotion cycle read from velocity or from neurons, and the two fits and their runs.
+- `data/CTRNNActivityFit.txt`: the 2-node CTRNN fitted (CMA-ES) to the activity of the forward
+  command neurons (AVB) and the reverse ones (AVA and AVE, averaged), one node each, in the 10
+  recordings with both labelled. The fit matches the statistics of the two traces (quantiles,
+  auto- and cross-correlation, time above and below the mean) and keeps only networks that
+  oscillate without noise.
+- `data/HorchlerFitWWWNoise0.1.txt`: the heteroclinic network's rates fitted (CMA-ES) for noise
+  0.1 to the worms' mean dwell times in Forward → Pause 1 → Reverse → Pause 2, read from the
+  velocity of all 68 recordings.
 - The WormWideWeb recordings (Atanas, Kim et al. 2023; about 0.5 GB) are downloaded to
-  `data/wormwideweb/` the first time `FittedModel.jl` runs.
+  `data/wormwideweb/` the first time `FittedModel.jl` runs. Recordings with a heat stimulus
+  are used up to the first heat pulse.
 
 Both fits are saved, so the figures do not rerun them. To refit, set `refit = true` in
-`FittedModel.jl`. This takes hours and overwrites the two fit files.
+`FittedModel.jl`. This takes a few hours and overwrites the two fit files.
 
 ## Notes
 
@@ -68,5 +71,4 @@ networks:
 
 ## License
 
-The code is under the MIT license (`LICENSE`). The Roberts et al. bouts in `data/` come from
-their CC0 Dryad dataset.
+The code is under the MIT license (`LICENSE`).
