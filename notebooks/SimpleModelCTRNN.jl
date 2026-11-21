@@ -34,16 +34,16 @@ end
 md"""
 # The simple CTRNN model
 
-This is a notebook focused on the simplified 3D CTRNN model. This model takes the form of three-node ring. Each node is connected to the next with weight ``w_n`` and to the node before it with weight ``w_p``. The equation for the system can be written as:
+This is a notebook focused on the simplified 3D CTRNN model. This model takes the form of three-node ring. Each node is inhibited by the next with strength ``w_n`` and by the node before it with strength ``w_p``, both positive. The equation for the system can be written as:
 
 ```math
-\dot y_i = -y_i + \sigma(y_i) + w_n\, \sigma(y_{i+1}) + w_p\, \sigma(y_{i-1}),
+\dot y_i = -y_i + \sigma(y_i) - w_n\, \sigma(y_{i+1}) - w_p\, \sigma(y_{i-1}),
 \qquad \sigma(y) = \frac{1}{1 + e^{-y}},
 ```
 
 For some simulations we use a noisy version of the equation:
 ```math
-\dot y_i = -y_i + \sigma(y_i) + w_n\, \sigma(y_{i+1}) + w_p\, \sigma(y_{i-1}) + \sqrt{2D}\, Y_i(t)
+\dot y_i = -y_i + \sigma(y_i) - w_n\, \sigma(y_{i+1}) - w_p\, \sigma(y_{i-1}) + \sqrt{2D}\, Y_i(t)
 ```
 
 where each ``Y_i(t)`` is independent white noise and ``\sqrt{2D} = 0.1``. For all simulations we use the Euler-Maruyama method. For deterministic simulations, set the noise constant to 0.
@@ -63,8 +63,8 @@ This notebook contains 9 figures:
 
 # ╔═╡ 4070bcdb-b5b9-4521-840c-a60cd020ba9e
 begin
-    excitable = (wp=-6.9, wn=-15.0)
-    limit_cycle_setting = (wp=-5.0, wn=-14.0)
+    excitable = (wp=6.9, wn=15.0)
+    limit_cycle_setting = (wp=5.0, wn=14.0)
 
     noise = 0.1
     dt = 0.01
@@ -147,11 +147,11 @@ basins_plot = basin_portrait(excitable_basins, excitable_equilibria; coords=outp
     title="$excitable_name:\n")
 
 # ╔═╡ f0bd0c0e-1c67-4ab3-a5de-0c0c5458db6e
-md"**Bifurcation chart** over ``(w_p, w_n) \in [-20, 0]^2``: Hopf and fold curves by continuation (BifurcationKit), and the heteroclinic bifurcation where the limit cycle ends, found by bisection."
+md"**Bifurcation chart** over ``(w_p, w_n) \in [0, 20]^2``: Hopf and fold curves by continuation (BifurcationKit), and the heteroclinic bifurcation where the limit cycle ends, found by bisection."
 
 # ╔═╡ d453f0c3-539c-4b1e-b329-171f9bb25205
 ctrnn_chart = bifurcation_chart(ctrnn3, limit_cycle_setting, (@optic _.wp), (@optic _.wn);
-    range1=(-20.0, 0.0), range2=(-20.0, 0.0), starts1=[-12.0, -4.0], starts2=[-12.0, -4.0])
+    range1=(0.0, 20.0), range2=(0.0, 20.0), starts1=[4.0, 12.0], starts2=[4.0, 12.0])
 
 # ╔═╡ c04845a9-ec35-4f71-acc0-f7926106b956
 begin
@@ -159,18 +159,18 @@ begin
     hopf_sum = median(c.x[k] + c.y[k] for c in ctrnn_chart.curves if c.type == :hopf for k in eachindex(c.x))
     cycle_survives(q) = ends_on_cycle(ctrnn3, q; output=σ, duration=6000.0)
 
-    # Bisection in w_p at fixed w_n, between just past the Hopf line (cycle) and w_p = -10 (none).
+    # Bisection in w_p at fixed w_n, between just past the Hopf line (cycle) and w_p = 10 (none).
     function cycle_end(wn)
-        hi, lo = min(-6.0, hopf_sum - wn - 0.1), -10.0
-        cycle_survives((wp=hi, wn=wn)) && !cycle_survives((wp=lo, wn=wn)) || return NaN
+        cycle, none = max(6.0, hopf_sum - wn + 0.1), 10.0
+        cycle_survives((wp=cycle, wn=wn)) && !cycle_survives((wp=none, wn=wn)) || return NaN
         for _ in 1:20
-            mid = (hi + lo) / 2
-            cycle_survives((wp=mid, wn=wn)) ? (hi = mid) : (lo = mid)
+            mid = (cycle + none) / 2
+            cycle_survives((wp=mid, wn=wn)) ? (cycle = mid) : (none = mid)
         end
-        return (hi + lo) / 2
+        return (cycle + none) / 2
     end
 
-    end_wn = collect(-20.0:0.5:-9.0)
+    end_wn = collect(9.0:0.5:20.0)
     end_wp = fill(NaN, length(end_wn))
     Threads.@threads for k in eachindex(end_wn)
         end_wp[k] = cycle_end(end_wn[k])
@@ -184,13 +184,13 @@ chart_plot = let plt = chart_axes(ctrnn_chart; weight_labels..., title="CTRNN bi
         label="heteroclinic bifurcation")
     plot!(plt, end_wn[ok], end_wp[ok]; color="#eda100", linewidth=2, linestyle=:dash, label=false)
     label_regions!(plt, [
-        (x=-1.8, y=-7.8, text="1 stable equilibrium\n(all nodes equal)"),
-        (x=-3.5, y=-16.5, text="haunted limit cycle\nR → P → S"),
-        (x=-16.5, y=-4.0, text="haunted limit cycle\nR → S → P"),
-        (x=-7.7, y=-17.2, text="3 stable eq. + cycle", rotation=85),
-        (x=-17.2, y=-7.7, text="3 stable eq. + cycle", rotation=5),
-        (x=-14.0, y=-14.0, text="3 stable equilibria"),
-        (x=-7.3, y=-7.1, text="4 stable\neq."),
+        (x=3.6, y=3.5, text="1 stable equilibrium\n(all nodes equal)"),
+        (x=3.5, y=16.5, text="haunted limit cycle\nR → P → S"),
+        (x=16.5, y=4.0, text="haunted limit cycle\nR → S → P"),
+        (x=7.8, y=17.3, text="3 stable eq. + cycle", rotation=85),
+        (x=17.2, y=7.7, text="3 stable eq. + cycle", rotation=5),
+        (x=14.0, y=14.0, text="3 stable equilibria"),
+        (x=7.3, y=7.1, text="4 stable\neq."),
     ])
     draw_stars!(plt, stars)
 end
@@ -207,8 +207,8 @@ overlay_plot = let plt = metastability_heatmap(ctrnn_scan; weight_labels..., col
     ok = .!isnan.(end_wp)
     heteroclinic = [(type=:heteroclinic, x=end_wp[ok], y=end_wn[ok]), (type=:heteroclinic, x=end_wn[ok], y=end_wp[ok])]
     chart_overlay!(plt, ctrnn_chart; scan=ctrnn_scan, extra=heteroclinic,
-        labels=[(type=:hopf, near=(-14.8, -2.6)), (type=:fold, near=(-5.6, -12.0)), (type=:fold, near=(-18.5, -5.6)),
-            (type=:heteroclinic, near=(-10.0, -15.5)), (type=:heteroclinic, near=(-15.5, -10.0))])
+        labels=[(type=:hopf, near=(14.8, 2.6)), (type=:fold, near=(5.6, 12.0)), (type=:fold, near=(18.5, 5.6)),
+            (type=:heteroclinic, near=(10.0, 15.5)), (type=:heteroclinic, near=(15.5, 10.0))])
     draw_stars!(plt, stars)
 end
 
@@ -225,15 +225,15 @@ end
 # ╔═╡ 35aaaf79-f9bc-4747-8b0c-75193a8900af
 begin
     # The fold at the same w_n, from the Rock-dominated stable/saddle pair just inside it.
-    fold_inside = (wp=-6.7, wn=limit_cycle_setting.wn)
+    fold_inside = (wp=6.7, wn=limit_cycle_setting.wn)
     fold_start = first(e.y for e in find_equilibria(ctrnn3, fold_inside) if !is_symmetric(e.y) && argmax(e.y) == 1)
-    fold_branch = continue_equilibria(ctrnn3, fold_inside, fold_start, (@optic _.wp); p_min=-8.0, p_max=-6.0)
+    fold_branch = continue_equilibria(ctrnn3, fold_inside, fold_start, (@optic _.wp); p_min=6.0, p_max=8.0)
     fold_point = only(sp for sp in fold_branch.specialpoint if sp.type in (:fold, :bp))
     cycle_fold = (y=fold_point.x, λ=fold_point.param)
 
     # Past the fold the pair is complex; follow it from the fold to the limit-cycle setting.
     fold_null = svd(ctrnn3.jacobian(cycle_fold.y, (wp=cycle_fold.λ, wn=limit_cycle_setting.wn))).V[:, end]
-    ghost_path = accumulate(range(cycle_fold.λ + 1e-4, limit_cycle_setting.wp; length=80);
+    ghost_path = accumulate(range(cycle_fold.λ - 1e-4, limit_cycle_setting.wp; length=80);
             init=cycle_fold.y .+ 0.01im .* fold_null) do previous, wp
         complex_equilibrium(ctrnn3, (wp=wp, wn=limit_cycle_setting.wn), previous)
     end

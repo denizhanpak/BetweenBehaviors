@@ -34,17 +34,18 @@ end
 md"""
 # The simple GLV model
 
-The 3-node generalized Lotka–Volterra ring of the paper. Rock, Paper and Scissors each receive
-the weight ``a_p`` from their predecessor on the ring and ``a_n`` from their successor:
+The 3-node generalized Lotka–Volterra ring of the paper. Rock, Paper and Scissors are each
+inhibited with strength ``a_p`` by their predecessor on the ring and ``a_n`` by their successor,
+both positive:
 
 ```math
-\dot x_i = x_i \big(1 - x_i + a_n\, x_{i+1} + a_p\, x_{i-1}\big) + \varepsilon,
+\dot x_i = x_i \big(1 - x_i - a_n\, x_{i+1} - a_p\, x_{i-1}\big) + \varepsilon,
 \qquad \varepsilon = 10^{-6}.
 ```
 
-Two settings: excitable ``(a_p, a_n) = (-1.1, -1.7)`` and heteroclinic ``(-0.8, -2.1)``.
+Two settings: excitable ``(a_p, a_n) = (1.1, 1.7)`` and heteroclinic ``(0.8, 2.1)``.
 Noisy runs integrate the same flow in ``u_i = \sqrt{x_i}``,
-``\dot u_i = \tfrac12 u_i (1 - x_i + a_n x_{i+1} + a_p x_{i-1})`` (without ``\varepsilon``),
+``\dot u_i = \tfrac12 u_i (1 - x_i - a_n x_{i+1} - a_p x_{i-1})`` (without ``\varepsilon``),
 with white noise of strength 0.1 on every ``u_i`` (Euler–Maruyama), so the activities stay
 non-negative. The last cell saves the figures to `figures/`:
 
@@ -68,8 +69,8 @@ noise, are set out by Ashwin & Postlethwaite:
 
 # ╔═╡ 1bebd99e-835e-4f4e-aa2d-da367c15c41b
 begin
-    excitable = (ap=-1.1, an=-1.7)
-    heteroclinic = (ap=-0.8, an=-2.1)
+    excitable = (ap=1.1, an=1.7)
+    heteroclinic = (ap=0.8, an=2.1)
 
     noise = 0.1
     dt = 0.01
@@ -176,19 +177,19 @@ begin
 end
 
 # ╔═╡ 8425020a-0683-4c0b-9aba-7bbfc1c974f5
-md"**Bifurcation chart** over ``(a_p, a_n) \in [-3, 0]^2``: Hopf and fold curves found by continuation (BifurcationKit)."
+md"**Bifurcation chart** over ``(a_p, a_n) \in [0, 3]^2``: Hopf and fold curves found by continuation (BifurcationKit)."
 
 # ╔═╡ 9d1b6392-6705-407f-909f-ccb3ef828994
 glv_chart = bifurcation_chart(glv3, heteroclinic, (@optic _.ap), (@optic _.an);
-    range1=(-3.0, 0.0), range2=(-3.0, 0.0), starts1=[-2.5, -1.5, -0.5], starts2=[-2.5, -1.5, -0.5])
+    range1=(0.0, 3.0), range2=(0.0, 3.0), starts1=[0.5, 1.5, 2.5], starts2=[0.5, 1.5, 2.5])
 
 # ╔═╡ a2d0e3f8-9e53-4bfe-8c57-bd341589282a
 chart_plot = let plt = chart_axes(glv_chart; weight_labels..., title="GLV bifurcation chart")
     label_regions!(plt, [
-        (x=-0.45, y=-0.9, text="Single stable equilibrium \n(coexistence)"),
-        (x=-0.5, y=-2.6, text="heteroclinic cycle\nR → P → S"),
-        (x=-2.45, y=-0.5, text="heteroclinic cycle\nR → S → P"),
-        (x=-2.0, y=-2.0, text="3 stable equilibria\n(Rock, Paper, Scissors)"),
+        (x=0.62, y=0.45, text="Single stable equilibrium \n(coexistence)"),
+        (x=0.5, y=2.6, text="heteroclinic cycle\nR → P → S"),
+        (x=2.45, y=0.5, text="heteroclinic cycle\nR → S → P"),
+        (x=2.0, y=2.0, text="3 stable equilibria\n(Rock, Paper, Scissors)"),
     ])
     draw_stars!(plt, stars)
 end
@@ -200,10 +201,10 @@ md"**Metastability** with the bifurcation curves: at each of 300 × 300 settings
 glv_scan = metastability_scan(GLV_SCAN; noise, seed, cells=300)
 
 # ╔═╡ 3f234633-e347-4e1a-ab28-0e6f9b61bdf4
-overlay_plot = let plt = metastability_heatmap(glv_scan; weight_labels..., color=OVERLAY_COLORS.map, legend=:topleft,
+overlay_plot = let plt = metastability_heatmap(glv_scan; weight_labels..., color=OVERLAY_COLORS.map, legend=:bottomleft,
         title="GLV: fraction of runs metastable, with the Hopf and fold curves, noise $noise")
     chart_overlay!(plt, glv_chart; scan=glv_scan,
-        labels=[(type=:hopf, near=(-0.7, -1.6)), (type=:fold, near=(-1.2, -2.6)), (type=:fold, near=(-2.6, -0.9))])
+        labels=[(type=:hopf, near=(0.7, 1.6)), (type=:fold, near=(1.2, 2.6)), (type=:fold, near=(2.6, 0.9))])
     draw_stars!(plt, stars)
 end
 

@@ -1,11 +1,12 @@
 """
     SimpleModels
 
-The 3-node rock–paper–scissors rings of the paper. Node i receives the weight `p` from its
-predecessor and `n` from its successor; for p > n the cycle runs Rock → Paper → Scissors.
+The 3-node rock–paper–scissors rings of the paper. Node i is inhibited with strength `p` by its
+predecessor and `n` by its successor, both positive as in the paper's equations; for p < n the
+cycle runs Rock → Paper → Scissors.
 
-- `glv3`: ẋᵢ = xᵢ (1 − xᵢ + a_n xᵢ₊₁ + a_p xᵢ₋₁) + ε, parameters `(; ap, an)`.
-- `ctrnn3`: ẏᵢ = −yᵢ + σ(yᵢ) + w_n σ(yᵢ₊₁) + w_p σ(yᵢ₋₁), parameters `(; wp, wn)`; outputs σ(y).
+- `glv3`: ẋᵢ = xᵢ (1 − xᵢ − a_n xᵢ₊₁ − a_p xᵢ₋₁) + ε, parameters `(; ap, an)`.
+- `ctrnn3`: ẏᵢ = −yᵢ + σ(yᵢ) − w_n σ(yᵢ₊₁) − w_p σ(yᵢ₋₁), parameters `(; wp, wn)`; outputs σ(y).
 
 Also the metastability score of the paper's heatmaps (`heatmapsV2.py`) and the figures.
 """
@@ -48,35 +49,35 @@ const IMMIGRATION = 1e-6
 function glv3_rates(x, q)
     f, p, r = x
     (; ap, an) = q
-    return (f * (1 - f + an * p + ap * r) + IMMIGRATION,
-        p * (1 - p + an * r + ap * f) + IMMIGRATION,
-        r * (1 - r + an * f + ap * p) + IMMIGRATION)
+    return (f * (1 - f - an * p - ap * r) + IMMIGRATION,
+        p * (1 - p - an * r - ap * f) + IMMIGRATION,
+        r * (1 - r - an * f - ap * p) + IMMIGRATION)
 end
 
 """
-The GLV in u with x = u², without immigration: u̇ᵢ = (uᵢ/2)(1 − xᵢ + a_n xᵢ₊₁ + a_p xᵢ₋₁). The
+The GLV in u with x = u², without immigration: u̇ᵢ = (uᵢ/2)(1 − xᵢ − a_n xᵢ₊₁ − a_p xᵢ₋₁). The
 same flow, but x stays non-negative under noise on u.
 """
 function glv3_squared_rates(u, q)
     f, p, r = u .^ 2
     (; ap, an) = q
-    return (u[1] / 2 * (1 - f + an * p + ap * r), u[2] / 2 * (1 - p + an * r + ap * f), u[3] / 2 * (1 - r + an * f + ap * p))
+    return (u[1] / 2 * (1 - f - an * p - ap * r), u[2] / 2 * (1 - p - an * r - ap * f), u[3] / 2 * (1 - r - an * f - ap * p))
 end
 
-"""The 3-node GLV (Jacobian diag(1 + Mx) + diag(x) M, M = ring3(−1, a_p, a_n))."""
+"""The 3-node GLV (Jacobian diag(1 + Mx) + diag(x) M, M = −ring3(1, a_p, a_n))."""
 const glv3 = VectorField((dx, x, q) -> (dx .= glv3_rates(x, q)),
-    (x, q) -> (M = ring3(-1, q.ap, q.an); Diagonal(1 .+ M * x) + Diagonal(x) * M), fill(-4.1, 3), fill(4.1, 3))
+    (x, q) -> (M = -ring3(1, q.ap, q.an); Diagonal(1 .+ M * x) + Diagonal(x) * M), fill(-4.1, 3), fill(4.1, 3))
 
 """The CTRNN field at y as a tuple, parameters `(; wp, wn)`."""
 function ctrnn3_rates(y, q)
     f, p, r = y
     (; wp, wn) = q
     sf, sp, sr = σ(f), σ(p), σ(r)
-    return (-f + sf + wn * sp + wp * sr, -p + sp + wn * sr + wp * sf, -r + sr + wn * sf + wp * sp)
+    return (-f + sf - wn * sp - wp * sr, -p + sp - wn * sr - wp * sf, -r + sr - wn * sf - wp * sp)
 end
 
-"""The 3-node CTRNN, W = ring3(1, w_p, w_n). Equilibria have yᵢ ∈ [w_p + w_n, 1], inside the box for w ∈ [−20, 0]."""
-const ctrnn3 = VectorField(ctrnn_system(q -> ring3(1, q.wp, q.wn))..., fill(-41.0, 3), fill(2.0, 3))
+"""The 3-node CTRNN, W = ring3(1, −w_p, −w_n). Equilibria have yᵢ ∈ [−(w_p + w_n), 1], inside the box for w ∈ [0, 20]."""
+const ctrnn3 = VectorField(ctrnn_system(q -> ring3(1, -q.wp, -q.wn))..., fill(-41.0, 3), fill(2.0, 3))
 
 # ── Metastability (heatmapsV2.py) ───────────────────────────────────────────────────────
 
@@ -92,9 +93,9 @@ the parameters at (p, n). The GLV runs in u = √x with the noise on u (`heatmap
 x and reflects at 0); starts are x uniform on [0, 1]³. CTRNN starts are N(0.5, 1) per node.
 """
 const GLV_SCAN = (rates=glv3_squared_rates, start=rng -> sqrt.(rand(rng, 3)), output=u -> u^2,
-    range=range(-3.0, 0.0; length=100), params=(p, n) -> (ap=p, an=n))
+    range=range(0.0, 3.0; length=100), params=(p, n) -> (ap=p, an=n))
 const CTRNN_SCAN = (rates=ctrnn3_rates, start=rng -> randn(rng, 3) .+ 0.5, output=σ,
-    range=range(-20.0, 0.0; length=100), params=(p, n) -> (wp=p, wn=n))
+    range=range(0.0, 20.0; length=100), params=(p, n) -> (wp=p, wn=n))
 
 """
 The test of `heatmapsV2.py` on outputs `O` (3 × samples): a sample is dominant when one node
@@ -151,7 +152,7 @@ end
 number_text(x) = replace(string(isinteger(x) ? Int(x) : x), "-" => "−")
 numbers_text(v) = "(" * join(number_text.(v), ", ") * ")"
 
-"""The two weights of `q` as text, e.g. `(aₚ, aₙ) = (−1.1, −1.7)`."""
+"""The two weights of `q` as text, e.g. `(aₚ, aₙ) = (1.1, 1.7)`."""
 function weights_text(q)
     letter = haskey(q, :ap) ? "a" : "w"
     p, n = haskey(q, :ap) ? (q.ap, q.an) : (q.wp, q.wn)
