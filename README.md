@@ -6,7 +6,7 @@ versions it was run with.
 
 | Notebook | Figures (`figures/`) |
 |---|---|
-| `notebooks/FittedModel.jl` | `exp_data` (a worm's forward and reverse command-neuron activity and its velocity), `fitted_model` (time series of the fitted CTRNN and heteroclinic network), `fitted_dwell_times` (dwell times of the worms and the models) |
+| `notebooks/FittedModel.jl` | `exp_data` (a worm's forward and reverse command-neuron activity and its velocity), `fitted_model` (time series of the fitted CTRNN and heteroclinic network), `fitted_dwell_times` (dwell times of Roberts et al.'s worms and of the two models) |
 | `notebooks/SimpleModelGLV.jl` | the 3-node GLV: noisy and deterministic time series of the excitable and heteroclinic settings, basins of the excitable setting, the heteroclinic phase portrait, the bifurcation chart, the metastability heatmap with the bifurcation curves, and the saddle-value figure |
 | `notebooks/SimpleModelCTRNN.jl` | the 3-node CTRNN: noisy and deterministic time series of the excitable and limit-cycle settings, basins of the excitable setting, the bifurcation chart, the metastability heatmap with the bifurcation curves, the limit cycle with its ghosts, and its speed and distance from the ghosts |
 
@@ -32,22 +32,28 @@ noisy runs) take a few minutes on 8 threads; everything else takes seconds to a 
     al.'s heteroclinic network.
   - `SimpleModels.jl` (the two simple-model notebooks): the 3-node rings and their figures. The
     basins are computed by Attractors.jl and their boundaries drawn with Meshing.jl.
-  - `FittedModels.jl` (FittedModel): the worm recordings and their command neurons, the
-    locomotion cycle read from velocity or from neurons, and the two fits and their runs.
-- `data/CTRNNActivityFit.txt`: the 2-node CTRNN fitted (CMA-ES) to the activity of the forward
-  command neurons (AVB) and the reverse ones (AVA and AVE, averaged), one node each, in the 10
-  recordings with both labelled. The fit matches the statistics of the two traces (quantiles,
-  auto- and cross-correlation, time above and below the mean) and keeps only networks that
-  oscillate without noise.
-- `data/HorchlerFitWWWNoise0.1.txt`: the heteroclinic network's rates fitted (CMA-ES) for noise
-  0.1 to the worms' mean dwell times in Forward → Pause 1 → Reverse → Pause 2, read from the
-  velocity of all 68 recordings.
+  - `FittedModels.jl` (FittedModel): Roberts et al.'s dwell times, the two fits and their
+    runs, and the WormWideWeb recording shown in `exp_data`.
+- Both models are fitted to the dwell times of Roberts et al.'s (2016) wild-type worms in Forward,
+  Pause 1, Reverse and Pause 2: the Table 1 mean of each state, with an SD equal to it, as the
+  exponential dwell times of their Markov model imply (they report no SD of the bouts).
+- `data/CTRNNRobertsFit.txt`: the 2-node CTRNN fitted (CMA-ES) to those means and SDs, its
+  behaviour read from which node's output is above ½. The fit starts just past the saddle-node on
+  invariant circle bifurcation of an excitable network, where it begins to oscillate, and adds a
+  penalty to networks that do not oscillate without noise; its noise is fitted too. It was
+  first fitted with SDs from Roberts et al.'s decoded bouts, then refitted from that fit to the
+  targets above.
+- `data/HorchlerRobertsFit.txt`: the heteroclinic network's rates and the noise on each node
+  fitted (CMA-ES) to the same means and SDs. It started from Horchler et al.'s (2015) design rule
+  (their SHCTools `shc_lv_params`) with one noise level for all nodes, fitted to the decoded-bout
+  SDs, and was then refitted from that fit with a noise level per node (equivalent to fitting
+  Horchler's node sizes βᵢ).
 - The WormWideWeb recordings (Atanas, Kim et al. 2023; about 0.5 GB) are downloaded to
-  `data/wormwideweb/` the first time `FittedModel.jl` runs. Recordings with a heat stimulus
-  are used up to the first heat pulse.
+  `data/wormwideweb/` the first time `FittedModel.jl` runs; one of them is shown in `exp_data`.
 
 Both fits are saved, so the figures do not rerun them. To refit, set `refit = true` in
-`FittedModel.jl`. This takes a few hours and overwrites the two fit files.
+`FittedModel.jl`: each model is refitted from its saved fit. This takes an hour or more and
+overwrites the two fit files.
 
 ## Notes
 

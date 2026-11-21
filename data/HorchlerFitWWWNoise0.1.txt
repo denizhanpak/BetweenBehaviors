@@ -1,5 +1,0 @@
-# 4-state heteroclinic GLV (Horchler construction, β = ν = 1), α fitted for additive noise 0.1 on u (FittedModels.horchler_dwell_fit)
-# to the WormWideWeb dwell times [12.46, 1.49, 7.72, 1.11] s. Euler–Maruyama dt = 0.0016683350016683349 s, sampled every 0.6097636976540693 s; seeds 1001:1064, each 2000.0 s after 20.0 s.
-# Objective Σ log(mean dwell / target)² = 0.0006117197362320717, 150 generations of CMA-ES; fitted 2026-11-13.
-# α: Forward, Pause 1, Reverse, Pause 2
-0.1826352823279765 2.0300575616296936 0.2730846722552164 2.7622514465826113

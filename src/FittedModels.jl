@@ -1,21 +1,22 @@
 """
     FittedModels
 
-The fitted models and the data of the FittedModel notebook, all on the WormWideWeb recordings
-(Atanas, Kim et al. 2023):
+The fitted models and the data of the FittedModel notebook:
 
-- the forward and reverse command neurons of a recording (`COMMAND_CLASSES`: AVB; AVA and AVE),
-  averaged into one z-scored trace each, and the statistics of such a pair of traces
-  (`activity_stats`);
-- the 2-node CTRNN fitted to those statistics, one node per cluster, restricted to networks that
-  oscillate without noise (`ctrnn_activity_fit`, saved in `data/`);
-- the locomotion cycle Forward → Pause 1 → Reverse → Pause 2 read from a sequence of 'F', 'P' and
-  'R' (`cycle_bouts`): from the worms' velocity, and from the command neurons, the worms' or the
-  CTRNN's (`neural_sequence`);
-- the 4-state heteroclinic network's rates fitted to the worms' dwell times in that cycle
-  (`horchler_dwell_fit`, saved in `data/`);
-- the recordings themselves, as published on wormwideweb.org (Flavell lab), and the figure of
-  activity above velocity. Each dataset JSON follows `dataset_json_readme.md` of
+- the dwell times of Roberts et al.'s (2016) wild-type worms in Forward → Pause 1 → Reverse →
+  Pause 2: their Table 1 means, with SDs equal to those means as their Markov model's exponential
+  dwell times imply (`roberts_target`);
+- the 2-node CTRNN fitted to those means and SDs, with its behaviour read from which node's
+  output is above ½ (Roberts et al.'s two command units). The fit starts just past the
+  saddle-node on invariant circle (SNIC) bifurcation of an excitable network, on the side where
+  the network oscillates, and prefers networks that oscillate without noise (`ctrnn_dwell_fit`,
+  saved in `data/`);
+- the 4-state heteroclinic network's rates and noise fitted to the same means and SDs, starting
+  from Horchler et al.'s (2015) design rule (`horchler_design`, `horchler_dwell_fit`, saved in
+  `data/`);
+- a WormWideWeb recording (Atanas, Kim et al. 2023) for the activity-above-velocity figure: its
+  forward and reverse command neurons (`COMMAND_CLASSES`) and its velocity, as published on
+  wormwideweb.org (Flavell lab). Each dataset JSON follows `dataset_json_readme.md` of
   github.com/flavell-lab/WormWideWeb: traces are neuron × frame, neuron rows and frame indices are
   1-based, the NeuroPAL `label` table is keyed by neuron row, and the head-angle sign is already
   corrected.
@@ -24,7 +25,7 @@ module FittedModels
 
 using Random
 using Statistics
-using StatsBase: rle, autocor
+using StatsBase: rle
 using Plots
 using JSON
 using Downloads
@@ -33,11 +34,12 @@ using Dates: Dates
 using ..Common: VectorField, sde_trajectory, find_equilibria, σ, ctrnn_system, squared_glv_rates, horchler_parameters
 
 export COMMAND_CLASSES, used_pieces, cluster_rows, has_command_neurons, zscore, cluster_activity
-export CYCLE_STATES, PAUSE_SPEED, velocity_sequence, neural_sequence, label_sequence, cycle_bouts, dwell_summary
-export ACTIVITY_STAT_NAMES, activity_stats, activity_target, activity_loss
-export network, ctrnn, ctrnn_rates, noise_free_cycle, cycle_period, ctrnn_noisy_run, ctrnn_activity_stats
-export CTRNN_START, read_ctrnn_fit, ctrnn_activity_fit
-export read_horchler_fit, horchler_noisy_run, horchler_labels, horchler_mean_dwell, horchler_dwell_fit
+export CYCLE_STATES, PAUSE_SPEED, ROBERTS_RATE, ROBERTS_TABLE1_MEAN, roberts_target
+export label_dwell, dwell_loss
+export network, ctrnn, ctrnn_rates, noise_free_cycle, cycle_period, ctrnn_noisy_run, roberts_label, ctrnn_labels
+export ctrnn_dwell, EXCITABLE_GENOME, snic_start, read_ctrnn_genome, read_ctrnn_fit, ctrnn_dwell_fit
+export stone_holmes, horchler_period, horchler_design, read_horchler_fit, horchler_noisy_run, horchler_labels
+export horchler_dwell, horchler_dwell_fit
 export NeuronLabel, WormDataset
 export download_paper, dataset_files, load_dataset
 export FORWARD, PAUSE, REVERSE
@@ -86,119 +88,61 @@ frames, averaged, and the average z-scored.
 cluster_activity(r, classes, frames) =
     zscore(vec(mean(reduce(hcat, zscore(r.traces[i, frames]) for i in cluster_rows(r, classes)); dims=2)))
 
-# ══ The locomotion cycle ════════════════════════════════════════════════════════════════
+
+# ══ Roberts et al.'s (2016) dwell times ═════════════════════════════════════════════════
 
 const CYCLE_STATES = ["Forward", "Pause 1", "Reverse", "Pause 2"]
 
-"""Speed (mm/s) below which a worm is pausing."""
+"""Speed (mm/s) below which a WormWideWeb worm is pausing (the example recording's shading)."""
 const PAUSE_SPEED = 0.02
 
-"""'F', 'R' or 'P' at every sample of a velocity: forward or backward faster than `pause_speed`, or pausing."""
-velocity_sequence(v; pause_speed=PAUSE_SPEED) = [x > pause_speed ? 'F' : x < -pause_speed ? 'R' : 'P' for x in v]
+"""Roberts et al.'s video frame rate (Hz): both models are read every frame."""
+const ROBERTS_RATE = 29.97
 
 """
-'F', 'R' or 'P' at every sample of a pair of z-scored traces, forward and reverse: 'F' when only
-the forward trace is above 0, 'R' when only the reverse one is, 'P' otherwise. Used on the
-worms' command neurons and on the CTRNN alike.
+Roberts et al.'s (2016) Table 1 mean dwell times (s) of wild-type worms, in the order of
+`CYCLE_STATES`: Forward, Pause 1 (both command units off, their state X), Reverse, Pause 2 (both
+on, their state Y). Each is the mean over the five cohorts' fits (their ± is the SEM over cohorts,
+not a spread of the bouts).
 """
-neural_sequence(f, r) = [a && !b ? 'F' : b && !a ? 'R' : 'P' for (a, b) in zip(f .> 0, r .> 0)]
-
-"""'F', 'R' or 'P' for the heteroclinic network's states (1 Forward, 3 Reverse, 2 and 4 pauses)."""
-label_sequence(labels) = [l == 1 ? 'F' : l == 3 ? 'R' : 'P' for l in labels]
+const ROBERTS_TABLE1_MEAN = [5.329, 0.441, 1.945, 0.208]
 
 """
-    cycle_bouts(sequence, dt)
-
-The bouts of the cycle in a sequence of 'F', 'P' and 'R' sampled every `dt`, as `(state, length)`
-with state 1 Forward, 2 Pause 1, 3 Reverse, 4 Pause 2 and length in s. A pause between Forward
-and Reverse is Pause 1 and one between Reverse and Forward Pause 2; a pause between two runs in
-the same direction is merged into them (F P F is one Forward bout). The first and last bouts,
-cut short by the ends of the sequence, are dropped.
+What both models are fitted to: the Table 1 mean (`ROBERTS_TABLE1_MEAN`) of each state and an SD
+equal to it. Roberts et al. report no SD of the bouts; their dwell times are those of a Markov
+model, exponential, whose SD is its mean.
 """
-function cycle_bouts(sequence, dt)
-    v, l = rle(sequence)
-    v, l = collect(v), collect(l)
-    i = 2
-    while i < length(v)
-        if v[i] == 'P' && v[i-1] == v[i+1]
-            l[i-1] += l[i] + l[i+1]
-            deleteat!(v, i:i+1)
-            deleteat!(l, i:i+1)
-        else
-            i += 1
+roberts_target() = (; mean=ROBERTS_TABLE1_MEAN, sd=ROBERTS_TABLE1_MEAN)
+
+"""
+    label_dwell(series, dt)
+
+The mean, SD and number of the bouts of each state 1:4 over label series sampled every `dt`
+(each a state per sample), dropping each series' first and last bout, cut short by its ends;
+NaN for a state seen too rarely.
+"""
+function label_dwell(series, dt)
+    lengths = [Float64[] for _ in 1:4]
+    for s in series
+        v, l = rle(s)
+        for k in 2:length(v)-1
+            push!(lengths[v[k]], l[k] * dt)
         end
     end
-    out = Tuple{Int,Float64}[]
-    for k in 2:length(v)-1
-        state = v[k] == 'F' ? 1 : v[k] == 'R' ? 3 : (v[k-1], v[k+1]) == ('F', 'R') ? 2 : (v[k-1], v[k+1]) == ('R', 'F') ? 4 : 0
-        state > 0 && push!(out, (state, l[k] * dt))
-    end
-    return out
-end
-
-"""The mean, SD and number of the bouts `(state, length)` of each state 1:4 (NaN for a state never seen)."""
-function dwell_summary(bouts)
-    lengths = [[d for (s, d) in bouts if s == i] for i in 1:4]
     return (; mean=[isempty(x) ? NaN : mean(x) for x in lengths], sd=[length(x) < 2 ? NaN : std(x) for x in lengths],
         n=length.(lengths))
 end
 
-# ══ Activity statistics ═════════════════════════════════════════════════════════════════
+"""
+    dwell_loss(model, target)
 
-const QUANTILES = (0.1, 0.25, 0.5, 0.75, 0.9)
-const ACF_LAGS = (1.2, 3.0, 6.0, 12.0, 24.0)                  # s
-const CCF_LAGS = (-12.0, -6.0, -3.0, 0.0, 3.0, 6.0, 12.0)      # s; positive: reverse after forward
-
-"""The names of the entries of `activity_stats`."""
-const ACTIVITY_STAT_NAMES = [
-    ["forward q$(q)" for q in QUANTILES]; ["reverse q$(q)" for q in QUANTILES];
-    ["forward ACF $(l) s" for l in ACF_LAGS]; ["reverse ACF $(l) s" for l in ACF_LAGS];
-    ["CCF $(l) s" for l in CCF_LAGS];
-    ["log forward high (s)", "log forward low (s)", "log reverse high (s)", "log reverse low (s)"]]
-
-"""The mean length (s) of the stretches above and below 0, all but the first and last."""
-function high_low(x, dt)
-    v, l = rle(x .> 0)
-    v, l = v[2:end-1], l[2:end-1]
-    return (mean(l[v]) * dt, mean(l[.!v]) * dt)
+Σ log(mean / target mean)² + Σ log(SD / target SD)² over the four states, from `label_dwell`
+and `roberts_target`; 10⁶ when a state is missing.
+"""
+function dwell_loss(d, target)
+    e = sum(abs2, log.(d.mean ./ target.mean)) + sum(abs2, log.(d.sd ./ target.sd))
+    return isfinite(e) ? e : 1e6
 end
-
-"""
-    activity_stats(f, r, dt)
-
-The statistics of a pair of z-scored traces, forward `f` and reverse `r`, sampled every `dt` s,
-as one vector (names in `ACTIVITY_STAT_NAMES`): the quantiles of each trace, its autocorrelation
-at 1.2–24 s, their cross-correlation at −12 to 12 s (positive lags: reverse after forward), and
-the log mean time each spends above and below 0.
-"""
-function activity_stats(f, r, dt)
-    lag(s) = round(Int, s / dt)
-    cc(k) = k >= 0 ? cor(f[1:end-k], r[1+k:end]) : cor(f[1-k:end], r[1:end+k])
-    return [[quantile(f, q) for q in QUANTILES]; [quantile(r, q) for q in QUANTILES];
-        autocor(f, [lag(s) for s in ACF_LAGS]); autocor(r, [lag(s) for s in ACF_LAGS]);
-        [cc(lag(s)) for s in CCF_LAGS];
-        log.([high_low(f, dt)..., high_low(r, dt)...])]
-end
-
-"""
-    activity_target(recordings)
-
-What the CTRNN is fitted to, from the recordings with both command clusters labelled
-(`has_command_neurons`): the `activity_stats` of every used piece (`used_pieces`), their mean
-weighted by length (`target`) and their SD across pieces, at least 0.05 (`spread`), with the mean
-frame step `dt` of those recordings and their number `n`.
-"""
-function activity_target(recordings)
-    rs = filter(has_command_neurons, recordings)
-    pieces = [(r, p) for r in rs for p in used_pieces(r)]
-    S = reduce(hcat, [activity_stats(cluster_activity(r, COMMAND_CLASSES.forward, p),
-        cluster_activity(r, COMMAND_CLASSES.reverse, p), r.dt) for (r, p) in pieces])
-    w = [length(p) for (_, p) in pieces]
-    return (; target=S * w / sum(w), spread=max.(vec(std(S; dims=2)), 0.05), dt=mean(r.dt for r in rs), n=length(rs))
-end
-
-"""Σ ((model − target) / spread)² over the statistics; 10⁶ for a model without them (`nothing`)."""
-activity_loss(stats, t) = isnothing(stats) ? 1e6 : sum(abs2, (stats .- t.target) ./ t.spread)
 
 # ══ The 2-node CTRNN ════════════════════════════════════════════════════════════════════
 
@@ -248,65 +192,114 @@ function cycle_period(Y, θ; saveat=0.05)
 end
 
 """
-    ctrnn_noisy_run(net, seed; sample_dt, dt = 0.005, transient = 50.0, duration = 1000.0)
+    ctrnn_noisy_run(net, seed; sample_dt, dt, transient, duration)
 
 A run of the CTRNN with its own additive noise `net.noise` on the states (Euler–Maruyama, step
 `dt`), from states drawn from a standard normal with `seed`: `transient` dropped, then `duration`
 sampled every `sample_dt`, as `(; t, Y)`.
 """
-function ctrnn_noisy_run(net, seed; sample_dt, dt=0.005, transient=50.0, duration=1000.0)
+function ctrnn_noisy_run(net, seed; sample_dt, dt, transient, duration)
     rng = Xoshiro(seed)
     y0 = randn(rng, 2)
     return sde_trajectory(ctrnn_rates, net, y0, transient + duration; noise=net.noise, dt, rng, saveat=sample_dt, transient)
 end
 
 """
-The CTRNN's `activity_stats` (states z-scored per run, sampled like the worms) averaged over runs
-with `seeds`, or `nothing` for a run that diverges or stays flat.
+The behaviour of the CTRNN at a state `y`, from which node's output σ(y + θ) is above ½, as
+Roberts et al.'s two command units: 1 Forward alone, 2 neither (Pause 1), 3 Reverse alone,
+4 both (Pause 2).
 """
-function ctrnn_activity_stats(net, sample_dt; seeds=1:4, run_settings...)
-    S = map(seeds) do seed
-        Y = ctrnn_noisy_run(net, seed; sample_dt, run_settings...).Y
-        (any(!isfinite, Y) || any(std(y) < 1e-9 for y in eachrow(Y))) && return nothing
-        activity_stats(zscore(Y[1, :]), zscore(Y[2, :]), sample_dt)
+roberts_label(y, θ) = (f = y[1] + θ[1] > 0; r = y[2] + θ[2] > 0; f ? (r ? 4 : 1) : (r ? 3 : 2))
+
+"""The CTRNN's behaviour at every sample of a run (`roberts_label`)."""
+ctrnn_labels(Y, net) = [roberts_label(y, net.θ) for y in eachcol(Y)]
+
+"""
+    ctrnn_dwell(net; seeds = 1:4, sample_dt = 1 / ROBERTS_RATE, dt = 1 / (6 ROBERTS_RATE), transient = 50.0, duration = 1000.0)
+
+The CTRNN's dwell times (`label_dwell` of `ctrnn_labels`) over runs with the `seeds` given
+(`ctrnn_noisy_run`); NaN throughout when a run diverges.
+"""
+function ctrnn_dwell(net; seeds=1:4, sample_dt=1 / ROBERTS_RATE, dt=1 / (6ROBERTS_RATE), transient=50.0, duration=1000.0)
+    series = map(seeds) do seed
+        r = ctrnn_noisy_run(net, seed; sample_dt, dt, transient, duration)
+        any(!isfinite, r.Y) ? Int[] : ctrnn_labels(r.Y, net)
     end
-    return any(isnothing, S) ? nothing : mean(S)
+    any(isempty, series) && return (; mean=fill(NaN, 4), sd=fill(NaN, 4), n=zeros(Int, 4))
+    return label_dwell(series, sample_dt)
 end
 
 """
-Where the activity fit starts: the 2-node CTRNN once fitted to Roberts et al.'s (2016) dwell
-times, an oscillator, with its time constants doubled and noise 0.15 of each state's range.
+The excitable 2-node network the fit starts from (an earlier fit to WormWideWeb activity,
+rounded): a stable node next to a saddle, with an unstable focus inside. The genome is
+W_FF W_RF W_FR W_RR (column-major), θ_F θ_R, log τ_F log τ_R (s), log noise_F log noise_R.
 """
-const CTRNN_START = [7.445739172768187, -3.7203945373732137, 1.994685020079162, 5.329814365907088,
-    -4.635460230491318, -1.330625360589267, -1.173409328204415, -1.5901249715194448, -0.26299070823917686,
-    0.17133145472373434]
-
-"""The network of a CTRNN fit file such as `data/CTRNNActivityFit.txt`: its last line that is not a `#` comment."""
-read_ctrnn_fit(path) = network(parse.(Float64, split(last(filter(line -> !startswith(line, "#"), readlines(path))))))
+const EXCITABLE_GENOME = [7.75, -4.87, 3.31, 6.1, -4.78, -2.05, log(2.901), log(2.918), log(2.473), log(0.689)]
 
 """
-    ctrnn_activity_fit(path, target; runs = 2:5, iterations = 400)
+    snic_start(genome, cycle_length; past = 0.025)
 
-Refits the 2-node CTRNN to the worms' activity statistics `target` (`activity_target`) and
-writes the best genome to `path`, as in `data/CTRNNActivityFit.txt`. CMA-ES (Evolutionary: λ = 40,
-σ₀ = 1, at most `iterations` generations, offspring evaluated on all threads) minimises
-`activity_loss` of `ctrnn_activity_stats` over networks that oscillate without noise
-(`noise_free_cycle`; any other scores 10⁶), once per optimiser seed in `runs`, each from
-`CTRNN_START`, with weights and biases within ±20, time constants within [0.05, 20] s and noise
-within [0.01, 20]. Takes about 20 minutes a run on 2 threads.
+Where the CTRNN fit starts. Lowering θ_F from the excitable `genome` merges its stable node with
+the saddle beside it, a saddle-node on the invariant circle (SNIC): past it the network
+oscillates, slowly near the vanished equilibria (the Forward state). The bifurcation is found by
+bisection on θ_F, and the start is `past` beyond it. Its time constants are then divided by the
+factor k that makes the noise-free period `cycle_length`, and its noise multiplied by √k, which
+speeds the noisy network up by k without changing it otherwise. Returns the genome.
 """
-function ctrnn_activity_fit(path, target; runs=2:5, iterations=400)
-    loss(g) = (net = network(g); isnothing(noise_free_cycle(net)) ? 1e6 : activity_loss(ctrnn_activity_stats(net, target.dt), target))
+function snic_start(genome, cycle_length; past=0.025)
+    stable(θF) = any(e -> e.stability == :stable, find_equilibria(ctrnn, network([genome[1:4]; θF; genome[6:10]])))
+    stable(genome[5]) || error("the network has no stable equilibrium to start from")
+    # Step down in 0.01 to the first θ_F without a stable equilibrium (the oscillating band is narrow), then bisect.
+    hi = genome[5]
+    lo = hi - 0.01
+    while stable(lo)
+        hi, lo = lo, lo - 0.01
+        lo < genome[5] - 2 && error("no SNIC within 2 below θ_F")
+    end
+    for _ in 1:50
+        m = (lo + hi) / 2
+        stable(m) ? (hi = m) : (lo = m)
+    end
+    g = [genome[1:4]; lo - past; genome[6:10]]
+    net = network(g)
+    k = cycle_period(noise_free_cycle(net), net.θ) / cycle_length
+    return [g[1:6]; g[7:8] .- log(k); g[9:10] .+ log(k) / 2]
+end
+
+"""The genome of a CTRNN fit file such as `data/CTRNNRobertsFit.txt`: its last line that is not a `#` comment."""
+read_ctrnn_genome(path) = parse.(Float64, split(last(filter(line -> !startswith(line, "#"), readlines(path)))))
+
+"""The network of a CTRNN fit file (`read_ctrnn_genome`)."""
+read_ctrnn_fit(path) = network(read_ctrnn_genome(path))
+
+"""
+    ctrnn_dwell_fit(path, target; start = snic_start(EXCITABLE_GENOME, sum(target.mean)), runs = 2:5, iterations = 400,
+                    penalty = 2.0, trace = false)
+
+Refits the 2-node CTRNN to `target` (`roberts_target`) and writes the best genome to `path`, as
+in `data/CTRNNRobertsFit.txt`. CMA-ES (Evolutionary: λ = 40, σ₀ = 0.3, at most `iterations`
+generations) minimises `dwell_loss` of `ctrnn_dwell`, plus `penalty` for a network that does not
+oscillate without noise (`noise_free_cycle`), once per optimiser seed in `runs`, each from the
+genome `start`, with weights and biases within ±20, time constants within [0.05, 20] s and noise
+within [0.01, 20]. Takes about an hour a run.
+
+The saved fit was evolved in two stages: from the SNIC start, then from that fit
+(`start = read_ctrnn_genome(path)`) once the target SDs became the Table 1 means.
+"""
+function ctrnn_dwell_fit(path, target; start=snic_start(EXCITABLE_GENOME, sum(target.mean)), runs=2:5, iterations=400,
+    penalty=2.0, trace=false)
+    loss(g) = (net = network(g); dwell_loss(ctrnn_dwell(net), target) + (isnothing(noise_free_cycle(net)) ? penalty : 0.0))
     box = Evolutionary.BoxConstraints([fill(-20.0, 6); fill(log(0.05), 2); fill(log(0.01), 2)],
         [fill(20.0, 6); fill(log(20.0), 2); fill(log(20.0), 2)])
     fits = map(runs) do run
-        res = Evolutionary.optimize(loss, box, CTRNN_START, Evolutionary.CMAES(λ=40, sigma0=1.0),
-            Evolutionary.Options(iterations=iterations, rng=Xoshiro(run), parallelization=:thread))
+        res = Evolutionary.optimize(loss, box, start, Evolutionary.CMAES(λ=40, sigma0=0.3),
+            Evolutionary.Options(iterations=iterations, rng=Xoshiro(run), show_trace=trace, callback=_ -> (flush(stdout); false)))
         (; run, loss=Evolutionary.minimum(res), genome=Evolutionary.minimizer(res))
     end
     best = argmin(f -> f.loss, fits)
     open(path, "w") do io
-        println(io, "# 2-node CTRNN fitted to the activity statistics of AVB (node 1) and AVA+AVE (node 2), $(target.n) WormWideWeb recordings (FittedModels.ctrnn_activity_fit).")
+        println(io, "# 2-node CTRNN fitted to Roberts et al.'s (2016) Table 1 mean dwell times, with SD = mean (FittedModels.ctrnn_dwell_fit).")
+        println(io, "# Started from genome ", join(start, " "))
         println(io, "# Losses by optimiser seed: ", join(["$(f.run): $(f.loss)" for f in fits], ", "), "; fitted $(Dates.today()).")
         println(io, "# Genome: W_FF W_RF W_FR W_RR (column-major), θ_F θ_R, log τ_F log τ_R (s), log noise_F log noise_R")
         println(io, join(best.genome, " "))
@@ -316,14 +309,51 @@ end
 
 # ══ The 4-state heteroclinic network ════════════════════════════════════════════════════
 
-"""The α of a fit file such as `data/HorchlerFitWWWNoise0.1.txt`: its last line that is not a `#` comment."""
-read_horchler_fit(path) = parse.(Float64, split(last(filter(line -> !startswith(line, "#"), readlines(path)))))
+"""
+    stone_holmes(δ, ε, λu, λs)
+
+The mean time to leave a δ-neighbourhood of a saddle with unstable and stable eigenvalues λu and
+−λs under noise ε (Stone and Holmes 1990, as in Horchler's SHCTools `shc_passagetime`).
+"""
+stone_holmes(δ, ε, λu, λs) = (2 * (log(δ) - log(ε)) + log(4λu) - log1p(λu / λs) + Base.MathConstants.eulergamma) / (2λu)
+
+"""
+    horchler_period(α, ε; δ = 0.1)
+
+Horchler et al.'s (2015) time spent at a node with rate α (β = ν = 1) under noise ε: the
+transition to the next node, 2 log(1/δ − 1) / α, plus the passage time past the saddle
+(`stone_holmes`, both eigenvalues α), with δ = 0.1 β the neighbourhood (SHCTools `shc_lv_params`).
+"""
+horchler_period(α, ε; δ=0.1) = 2 * log(1 / δ - 1) / α + stone_holmes(δ, ε, α, α)
+
+"""
+    horchler_design(dwell, ε)
+
+Horchler et al.'s (2015) design rule: the rates α whose `horchler_period` at noise ε are the
+dwell times `dwell`, by bisection on log α (the period falls as α grows).
+"""
+function horchler_design(dwell, ε)
+    return map(dwell) do τ
+        lo, hi = log(1e-4), log(1e4)
+        for _ in 1:200
+            m = (lo + hi) / 2
+            horchler_period(exp(m), ε) > τ ? (lo = m) : (hi = m)
+        end
+        exp((lo + hi) / 2)
+    end
+end
+
+"""The rates α and noise levels of a fit file such as `data/HorchlerRobertsFit.txt`: its last line that is not a `#` comment, `α₁ … α₄ ε₁ … ε₄`."""
+function read_horchler_fit(path)
+    x = parse.(Float64, split(last(filter(line -> !startswith(line, "#"), readlines(path)))))
+    return (; α=x[1:4], noise=x[5:8])
+end
 
 """
     horchler_noisy_run(α, seed; noise, sample_dt, dt, transient, duration)
 
 A run of the 4-state heteroclinic network with rates `α` (`squared_glv_rates`,
-`horchler_parameters`) and additive noise `noise` on u (Euler–Maruyama, step `dt`), from u drawn
+`horchler_parameters`) and additive noise on u, `noise[i]` on node i (Euler–Maruyama, step `dt`), from u drawn
 uniformly in [0, 1]⁴ with `seed`: `transient` dropped, then `duration` sampled every `sample_dt`,
 as `(; t, Y)`.
 """
@@ -337,58 +367,58 @@ end
 horchler_labels(Y) = [argmax(abs.(u)) for u in eachcol(Y)]
 
 """
-    horchler_mean_dwell(α, seeds; settings...)
+    horchler_dwell(α, noise; seeds = 1001:1064, sample_dt = 1 / ROBERTS_RATE, dt = 1 / (20 ROBERTS_RATE), transient = 20.0, duration = 2000.0)
 
-The heteroclinic network's mean dwell time in each state of the cycle over runs with the `seeds`
-given (`horchler_noisy_run`, in parallel), read like the worms' (`cycle_bouts`): NaN for a state
-never visited.
+The heteroclinic network's dwell times (`label_dwell` of `horchler_labels`) over runs with the
+`seeds` given (`horchler_noisy_run`, in parallel); NaN throughout when a run diverges.
 """
-function horchler_mean_dwell(α, seeds; settings...)
-    series = Vector{Vector{Tuple{Int,Float64}}}(undef, length(seeds))
+function horchler_dwell(α, noise; seeds=1001:1064, sample_dt=1 / ROBERTS_RATE, dt=1 / (20ROBERTS_RATE), transient=20.0,
+    duration=2000.0)
+    series = Vector{Vector{Int}}(undef, length(seeds))
     Threads.@threads for k in eachindex(seeds)
-        labels = horchler_labels(horchler_noisy_run(α, seeds[k]; settings...).Y)
-        series[k] = cycle_bouts(label_sequence(labels), settings[:sample_dt])
+        r = horchler_noisy_run(α, seeds[k]; noise, sample_dt, dt, transient, duration)
+        series[k] = any(!isfinite, r.Y) ? Int[] : horchler_labels(r.Y)
     end
-    return dwell_summary(reduce(vcat, series)).mean
+    any(isempty, series) && return (; mean=fill(NaN, 4), sd=fill(NaN, 4), n=zeros(Int, 4))
+    return label_dwell(series, sample_dt)
 end
 
 """
-    horchler_dwell_fit(; file, target, noise, sample_dt, dt, transient, duration, seeds = 1001:1064, refit = false, miss = 0.01)
+    horchler_dwell_fit(; file, target, start = (; α = horchler_design(target.mean, 0.3), noise = fill(0.3, 4)),
+                       refit = false, trace = false)
 
-The rates α of the 4-state heteroclinic network (Horchler construction, β = ν = 1) whose mean
-dwell times with additive noise `noise`, sampled every `sample_dt` and read like the worms'
-(`horchler_mean_dwell`), match `target`, the worms' mean dwell times. Read from `file` when it
-exists; otherwise (or with `refit = true`) fitted and written there, which takes about an hour.
+The rates α and per-node noise levels ε (on u) of the 4-state heteroclinic network (Horchler
+construction, β = ν = 1) whose dwell times (`horchler_dwell`) match `target` (`roberts_target`),
+as `(; α, noise)`. Per-node noise is what Horchler's node sizes βᵢ would add: with uᵢ = √βᵢ vᵢ the
+network with βᵢ and noise ε is this one with noise ε / √βᵢ on node i. Read
+from `file` when it exists; otherwise (or with `refit = true`) fitted and written there, which
+takes about an hour.
 
-The fit minimises Σᵢ log(mᵢ / dᵢ)² (mᵢ on the fixed `seeds`, so the objective is deterministic;
-a state never visited scores 10⁶) by CMA-ES (Evolutionary: 8 offspring, 4 parents, initial step
-0.3, at most 150 generations, optimiser seed 1) on log α within [log 0.01, log 200]. It starts
-from αᵢ = ln(1/noise) / dᵢ, the passage time past a saddle (Stone–Holmes). A fit whose objective
-is above `miss` (0.01: about 5 % off per state) is returned with a warning.
+The fit starts from `start`, by default Horchler et al.'s design (`horchler_design`) of the
+target means at noise 0.3 on every node. The saved fit was evolved in two stages: from that
+design with one noise level shared by the nodes, fitted to SDs from Roberts et al.'s decoded
+bouts; then from that fit, with its noise on every node, with a noise level per node, once the
+target SDs became the Table 1 means. CMA-ES
+(Evolutionary: 8 offspring, 4 parents, initial step 0.3, at most 150 generations, optimiser seed
+1) then minimises `dwell_loss` (deterministic: fixed seeds) over log α within [log 0.01, log 200]
+and log ε within [log 0.001, 0].
 """
-function horchler_dwell_fit(; file, target, noise, sample_dt, dt, transient, duration, seeds=1001:1064, refit=false,
-    miss=0.01)
+function horchler_dwell_fit(; file, target, start=(; α=horchler_design(target.mean, 0.3), noise=fill(0.3, 4)),
+    refit=false, trace=false)
     if refit || !isfile(file)
-        settings = (; noise, sample_dt, dt, transient, duration)
-        function objective(logα)
-            e = sum(abs2, log.(horchler_mean_dwell(exp.(logα), seeds; settings...) ./ target))
-            return isfinite(e) ? e : 1e6
-        end
-        start = log.(log(1 / noise) ./ target)
-        cma = Evolutionary.optimize(objective, Evolutionary.BoxConstraints(fill(log(0.01), 4), fill(log(200.0), 4)),
-            start, Evolutionary.CMAES(μ=4, λ=8, sigma0=0.3), Evolutionary.Options(iterations=150, rng=Xoshiro(1)))
+        objective(x) = dwell_loss(horchler_dwell(exp.(x[1:4]), exp.(x[5:8])), target)
+        x0 = [log.(start.α); log.(start.noise)]
+        box = Evolutionary.BoxConstraints([fill(log(0.01), 4); fill(log(1e-3), 4)], [fill(log(200.0), 4); zeros(4)])
+        cma = Evolutionary.optimize(objective, box, x0, Evolutionary.CMAES(μ=4, λ=8, sigma0=0.3),
+            Evolutionary.Options(iterations=150, rng=Xoshiro(1), show_trace=trace, callback=_ -> (flush(stdout); false)))
+        x = Evolutionary.minimizer(cma)
         open(file, "w") do io
-            println(io, "# 4-state heteroclinic GLV (Horchler construction, β = ν = 1), α fitted for additive noise $noise on u (FittedModels.horchler_dwell_fit)")
-            println(io, "# to the WormWideWeb dwell times $(round.(target; digits=3)) s. Euler–Maruyama dt = $dt s, sampled every $sample_dt s; seeds $seeds, each $duration s after $transient s.")
-            println(io, "# Objective Σ log(mean dwell / target)² = $(Evolutionary.minimum(cma)), " *
+            println(io, "# 4-state heteroclinic GLV (Horchler construction, β = ν = 1) fitted to Roberts et al.'s (2016) Table 1 mean dwell times, with SD = mean (FittedModels.horchler_dwell_fit),")
+            println(io, "# from α = $(join(start.α, " ")), ε = $(join(start.noise, " ")). dwell_loss = $(Evolutionary.minimum(cma)), " *
                         "$(Evolutionary.iterations(cma)) generations of CMA-ES; fitted $(Dates.today()).")
-            println(io, "# α: Forward, Pause 1, Reverse, Pause 2")
-            println(io, join(exp.(Evolutionary.minimizer(cma)), " "))
+            println(io, "# α: Forward, Pause 1, Reverse, Pause 2; then the noise ε on u of each node, same order")
+            println(io, join(exp.(x), " "))
         end
-    end
-    reached = match(r"Objective .* = ([0-9.eE+-]+),", read(file, String))
-    if !isnothing(reached) && parse(Float64, reached[1]) > miss
-        @warn "The heteroclinic network's fit misses the worms' dwell times: objective $(reached[1]) > $miss ($(basename(file)))."
     end
     return read_horchler_fit(file)
 end
