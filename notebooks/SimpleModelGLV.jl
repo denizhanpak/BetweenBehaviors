@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v1.0.4
+# v1.1.0
 
 using Markdown
 using InteractiveUtils
@@ -36,28 +36,35 @@ md"""
 
 The 3-node generalized Lotka–Volterra ring of the paper. Rock, Paper and Scissors are each
 inhibited with strength ``a_p`` by their predecessor on the ring and ``a_n`` by their successor,
-both positive:
+both positive. The model is the paper's eq. (5) with ``\alpha_i = 1``, in amplitudes ``c_i`` whose squares
+``x_i = c_i^2`` are the activities,
 
 ```math
-\dot x_i = x_i \big(1 - x_i - a_n\, x_{i+1} - a_p\, x_{i-1}\big) + \varepsilon,
-\qquad \varepsilon = 10^{-6}.
+\dot c_i = c_i \big(1 - c_i^2 - a_n\, c_{i+1}^2 - a_p\, c_{i-1}^2\big) + \sqrt{2D}\, Y_i(t),
 ```
 
-Two settings: excitable ``(a_p, a_n) = (1.1, 1.7)`` and heteroclinic ``(0.8, 2.1)``.
-Noisy runs integrate the same flow in ``u_i = \sqrt{x_i}``,
-``\dot u_i = \tfrac12 u_i (1 - x_i - a_n x_{i+1} - a_p x_{i-1})`` (without ``\varepsilon``),
-with white noise of strength 0.1 on every ``u_i`` (Euler–Maruyama), so the activities stay
-non-negative. The last cell saves the figures to `figures/`:
+with white noise ``Y_i`` of strength ``\sqrt{2D} = 0.1`` (Euler–Maruyama), so the activities
+stay non-negative. Without noise the activities follow
 
-1. a noisy run of the excitable setting;
+```math
+\dot x_i = 2 x_i \big(1 - x_i - a_n\, x_{i+1} - a_p\, x_{i-1}\big) + \varepsilon,
+\qquad \varepsilon = 10^{-6},
+```
+
+the same flow, with a small immigration ``\varepsilon`` for the deterministic runs, basins,
+manifolds and continuation. Two settings: multistable ``(a_p, a_n) = (1.1, 1.7)`` and
+heteroclinic ``(0.8, 1.3)``. The last cell saves the figures to `figures/`:
+
+1. a noisy run of the multistable setting;
 2. a noisy run of the heteroclinic setting;
-3. a deterministic run of the excitable setting;
+3. a deterministic run of the multistable setting;
 4. a deterministic run of the heteroclinic setting;
-5. the basins of the excitable setting, with figure 3's run;
-6. the saddles of the heteroclinic setting and their manifolds, with figure 4's run;
+5. the basins of the multistable setting;
+6. the saddles of the heteroclinic setting and their manifolds;
 7. the bifurcation chart across ``(a_p, a_n)``;
 8. the bifurcation curves over the metastability heatmap;
-9. the saddle value of a planar saddle.
+9. a panel of figure 8 beside figures 1 and 2;
+10. the saddle value of a planar saddle.
 
 Heteroclinic and excitable networks, how to build them from a graph and how they behave with
 noise, are set out by Ashwin & Postlethwaite:
@@ -70,26 +77,26 @@ noise, are set out by Ashwin & Postlethwaite:
 # ╔═╡ 1bebd99e-835e-4f4e-aa2d-da367c15c41b
 begin
     excitable = (ap=1.1, an=1.7)
-    heteroclinic = (ap=0.8, an=2.1)
+    heteroclinic = (ap=0.8, an=1.3)
 
     noise = 0.1
     dt = 0.01
     seed = 1
     sample_step = 0.05
     x_start = [0.5, 0.3, 0.2]
-    start_text = "x(0) = $(numbers_text(x_start))"
     excitable_duration = 160.0
     heteroclinic_duration = 120.0
-    activity_label = "activity x"
+
+    excitable_name = "GLV $(weights_text(excitable))"
+    heteroclinic_name = "GLV $(weights_text(heteroclinic))"
+    # A run's activities against time, titled by its setting and its start.
+    run_plot(run, name; kwargs...) = time_series_plot(run.t, run.Y; ylabel="activity x",
+        title="$name\nc(0) = $(numbers_text(x_start))", kwargs...)
 
     # Equilibria of the GLV with immigration sit up to ~1e-5 outside the orthant.
     in_orthant(y) = all(y .>= -1e-4)
 
-    stars = [
-        (p=excitable.ap, n=excitable.an, label="excitable $(weights_text(excitable))", color=STAR_COLORS.excitable),
-        (p=heteroclinic.ap, n=heteroclinic.an, label="heteroclinic $(weights_text(heteroclinic))",
-            color=STAR_COLORS.cycle),
-    ]
+    stars = setting_stars(excitable, heteroclinic)
     weight_labels = (xlabel="aₚ", ylabel="aₙ")
 end
 
@@ -98,7 +105,7 @@ md"**Noisy runs** of both settings. The shading marks the node holding the run: 
 
 # ╔═╡ a84c86eb-0043-42cf-bc1d-c457844a6a4a
 begin
-    # Runs in u = √x with the noise on u; Y holds the activities x = u².
+    # Runs of eq. (5) in amplitudes u = c = √x with the noise on u; Y holds the activities x = u².
     function noisy_run(q, duration)
         r = sde_trajectory(glv3_squared_rates, q, sqrt.(x_start), duration; noise, dt, seed, saveat=sample_step)
         return (; r.t, Y=r.Y .^ 2)
@@ -108,12 +115,10 @@ begin
 end
 
 # ╔═╡ 9d5aee5d-c251-42a7-a15e-a3f723d3da4d
-excitable_noisy_plot = time_series_plot(excitable_noisy.t, excitable_noisy.Y; ylabel=activity_label,
-    title="GLV $(weights_text(excitable))\nnoise $noise, $start_text")
+excitable_noisy_plot = run_plot(excitable_noisy, excitable_name)
 
 # ╔═╡ 1066902e-a61c-4521-9d7e-c3e2c7c58c24
-heteroclinic_noisy_plot = time_series_plot(heteroclinic_noisy.t, heteroclinic_noisy.Y; ylabel=activity_label,
-    title="GLV $(weights_text(heteroclinic))\nnoise $noise, $start_text")
+heteroclinic_noisy_plot = run_plot(heteroclinic_noisy, heteroclinic_name)
 
 # ╔═╡ e7ece230-a103-4af1-8867-b2a78ecdb548
 md"**Deterministic runs** of both settings, from the same start."
@@ -125,15 +130,13 @@ begin
 end
 
 # ╔═╡ 5e084608-af46-4e7e-8a2d-17eb5552d7af
-excitable_deterministic_plot = time_series_plot(excitable_deterministic.t, excitable_deterministic.Y;
-    ylabel=activity_label, title="GLV $(weights_text(excitable))\ndeterministic, $start_text")
+excitable_deterministic_plot = run_plot(excitable_deterministic, excitable_name; legendfontsize=12)
 
 # ╔═╡ a25fc447-0b32-484e-b910-1eb66fdce5de
-heteroclinic_deterministic_plot = time_series_plot(heteroclinic_deterministic.t, heteroclinic_deterministic.Y;
-    ylabel=activity_label, title="GLV $(weights_text(heteroclinic))\ndeterministic, $start_text")
+heteroclinic_deterministic_plot = run_plot(heteroclinic_deterministic, heteroclinic_name; legendfontsize=12)
 
 # ╔═╡ 5dc21556-995e-4c2d-a5c3-8350482f54d8
-md"**Basins** of the excitable setting's three stable equilibria: every point of a 41³ grid run without noise and labelled by the attractor it reaches."
+md"**Basins** of the multistable setting's three stable equilibria: every point of a 41³ grid run without noise and labelled by the attractor it reaches. Each boundary is striped in the colours of the two basins it divides."
 
 # ╔═╡ cfdaf0e9-d7b6-4725-a8f1-b7661bca7668
 begin
@@ -145,35 +148,37 @@ begin
 end
 
 # ╔═╡ 82c8ee68-9a32-4806-bf4a-0971dd2ce840
-basins_plot = basin_portrait(excitable_basins, filter(e -> in_orthant(e.y), excitable_equilibria);
-    lims=(0.0, 1.1), flows=excitable_flows, boundary_color="#8a8a8a", path=excitable_deterministic.Y,
-    path_label="run of figure 3", camera=(45, 30),
-    title="Excitable GLV $(weights_text(excitable)): basins in 3-D")
+# Without the unstable origin: immigration puts it just below the axes, where GR does not draw it.
+basins_plot = plot!(basin_portrait(excitable_basins,
+    filter(e -> in_orthant(e.y) && e.stability != :unstable, excitable_equilibria);
+    lims=(0.0, 1.1), flows=excitable_flows, stripe_width=0.15, camera=(140, 25),
+    title="Multistable $excitable_name"); legendfontsize=12, titlefontsize=12)
 
 # ╔═╡ 9f0aeadf-3f1c-4e51-8253-c36b76cf2302
-md"**Heteroclinic setting**: the saddles and their stable and unstable manifolds."
+md"**Heteroclinic setting**: the saddles and their 1-D stable and unstable manifolds, and a run started near the interior saddle, off its 2-D unstable manifold, that spirals around the saddle's stable manifold (the diagonal) on its way out to the cycle."
 
 # ╔═╡ c0e2b44b-fb72-4ff5-81f7-4273cf8c9150
 begin
     heteroclinic_equilibria = find_equilibria(glv3, heteroclinic)
 
-    # Points on a single-node saddle's stable manifold, the face without the next node: quarter
-    # circles of radius 0.05 and 1.5 around the origin in that face (NaN between them breaks the
-    # mesh's rings).
-    function face_starts(saddle)
-        i = argmax(saddle.y)
-        previous = mod1(i - 1, 3)
-        arc(radius) = [(y = zeros(3); y[i] = radius * cos(θ); y[previous] = radius * sin(θ); y)
-                       for θ in range(0.01, π / 2 - 0.01; length=25)]
-        return [arc(0.05); [fill(NaN, 3)]; arc(1.5)]
-    end
-
+    # Camera nearly down the diagonal (1, 1, 1), head on to the cycle, tilted off it (exactly on it
+    # is GR's azimuth 135°, elevation 35.26°) so the interior saddle's stable manifold, the
+    # diagonal, shows as a line; the Rock and Scissors saddles sit on their axes.
     portrait_plot = manifold_portrait(glv3, heteroclinic, heteroclinic_equilibria; lims=(0.0, 1.1),
-        path=heteroclinic_deterministic.Y, path_label="run of figure 4", camera=(45, 30), duration=60.0,
-        stable_surface=saddle -> (; starts=face_starts(saddle), duration=60.0, samples=240),
-        unstable_surface=(; n=24, duration=90.0, samples=240), ring_every=16, surface_alpha=0.2,
-        symmetric_name="interior saddle",
-        title="Heteroclinic GLV $(weights_text(heteroclinic)): saddles and their manifolds")
+        camera=(120, 18), duration=60.0, symmetric_name="interior saddle",
+        title="Heteroclinic $heteroclinic_name")
+
+    # A run from above the interior saddle, off its 2-D unstable manifold: it falls in towards the
+    # saddle, spirals out around its stable manifold (the diagonal) and joins the cycle.
+    spiral_start = [0.71, 0.76, 0.66]
+    draw_path!(portrait_plot, trajectory(glv3, heteroclinic, spiral_start, 150.0; saveat=sample_step).Y;
+        color=:gray, linewidth=1.5, label="transient from c(0) = $(numbers_text(spiral_start))")
+    # The legend follows the subplot's series order: move the run first so it heads the legend.
+    let series = portrait_plot[1].series_list
+        pushfirst!(series, pop!(series))
+    end
+    # Taller, not wider, so the larger legend clears the Scissors saddle at the same width as the basin figures.
+    plot!(portrait_plot; legendfontsize=12, titlefontsize=12, size=(760, 920))
 end
 
 # ╔═╡ 8425020a-0683-4c0b-9aba-7bbfc1c974f5
@@ -201,37 +206,39 @@ md"**Metastability** with the bifurcation curves: at each of 300 × 300 settings
 glv_scan = metastability_scan(GLV_SCAN; noise, seed, cells=300)
 
 # ╔═╡ 3f234633-e347-4e1a-ab28-0e6f9b61bdf4
-overlay_plot = let plt = metastability_heatmap(glv_scan; weight_labels..., color=OVERLAY_COLORS.map, legend=:bottomleft,
-        title="GLV: fraction of runs metastable, with the Hopf and fold curves, noise $noise")
+overlay_plot = let plt = metastability_heatmap(glv_scan; weight_labels..., color=OVERLAY_COLORS.map,
+        title="GLV Parameter Scan and Bifurcations")
     chart_overlay!(plt, glv_chart; scan=glv_scan,
-        labels=[(type=:hopf, near=(0.7, 1.6)), (type=:fold, near=(1.2, 2.6)), (type=:fold, near=(2.6, 0.9))])
+        labels=[(type=:hopf, near=(0.7, 1.6)), (type=:fold, near=(0.8, 2.6)), (type=:fold, near=(2.6, 0.9))])
     draw_stars!(plt, stars)
+    plot!(plt; legendfontsize=12)
 end
+
+# ╔═╡ a117795a-335a-48db-abee-5ba58ac370df
+md"**Panel**: the metastability heatmap with the bifurcation curves (left) beside the noisy runs of the two starred settings (right, multistable above, heteroclinic below)."
+
+# ╔═╡ 9b8867e2-7923-4039-8aa2-3063054e5ee7
+panel_plot = scan_panel(overlay_plot, excitable_noisy_plot, heteroclinic_noisy_plot; titlefontsize=15)
 
 # ╔═╡ 58467173-d809-4309-8355-bece040e56e4
-md"**Saddle value** ``V = -1/\mu`` of the planar saddle ``\dot x = \mu x - x^3``, ``\dot y = -y``: runs from ``(0.03, 0.5)`` for several ``\mu``."
+md"**Saddle value** ``S = 1/\mu`` of the planar saddle ``\dot x = \mu x - x^3``, ``\dot y = -y``: runs from ``(0.03, 0.5)`` for several ``\mu``."
 
 # ╔═╡ 8d63730d-229d-40fe-ada1-957d322c22ea
-saddle_plot = saddle_value_portrait(; title="Saddle value V = −1/μ: \nẋ = μx − x³, ẏ = −y, \n μ range = (0.03, 0.5)")
+saddle_plot = saddle_value_portrait(; title="Saddle value S = 1/μ:\nẋ = μx − x³, ẏ = −y")
 
 # ╔═╡ e2eae6ff-de48-49fb-96c6-0e4b947563ca
-begin
-    figure_dir = joinpath(@__DIR__, "..", "figures")
-    mkpath(figure_dir)
-    for (name, fig) in (
-        "simple_glv_stochastic_excitable" => excitable_noisy_plot,
-        "simple_glv_stochastic_heteroclinic" => heteroclinic_noisy_plot,
-        "simple_glv_deterministic_excitable" => excitable_deterministic_plot,
-        "simple_glv_deterministic_heteroclinic" => heteroclinic_deterministic_plot,
-        "simple_glv_basins" => basins_plot,
-        "simple_glv_heteroclinic_portrait" => portrait_plot,
-        "simple_glv_bifurcation_chart" => chart_plot,
-        "simple_glv_heatmap_bifurcations" => overlay_plot,
-        "simple_glv_saddle_value" => saddle_plot,
-    ), extension in (".png", ".pdf")
-        savefig(fig, joinpath(figure_dir, name * extension))
-    end
-end
+save_figures(joinpath(@__DIR__, "..", "figures"), (
+    "simple_glv_stochastic_excitable" => excitable_noisy_plot,
+    "simple_glv_stochastic_heteroclinic" => heteroclinic_noisy_plot,
+    "simple_glv_deterministic_excitable" => excitable_deterministic_plot,
+    "simple_glv_deterministic_heteroclinic" => heteroclinic_deterministic_plot,
+    "simple_glv_basins" => basins_plot,
+    "simple_glv_heteroclinic_portrait" => portrait_plot,
+    "simple_glv_bifurcation_chart" => chart_plot,
+    "simple_glv_heatmap_bifurcations" => overlay_plot,
+    "simple_glv_panel" => panel_plot,
+    "simple_glv_saddle_value" => saddle_plot,
+))
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -273,7 +280,7 @@ StochasticDiffEq = "~7.2.0"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.3"
+julia_version = "1.13.4"
 manifest_format = "2.1"
 project_hash = "75ef2802caf0f65f8af342bdbe43755bf999b4fd"
 
@@ -1942,7 +1949,7 @@ version = "1.11.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2026.10.20"
+version = "2026.11.5"
 
 [[deps.MuladdMacro]]
 deps = ["PrecompileTools"]
@@ -2108,7 +2115,7 @@ version = "0.3.34+0"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.30+0"
+version = "0.3.30+1"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
@@ -3515,7 +3522,7 @@ version = "2023.1.0+0"
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.8.3+0"
+version = "17.8.5+0"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3545,7 +3552,7 @@ uuid = "23338594-aafe-5451-b93e-139f81909106"
 
 # ╔═╡ Cell order:
 # ╠═d061c08c-3f95-4cd7-b83a-ba804990dbda
-# ╟─1805591c-e622-411a-bdf6-0e18cacdac26
+# ╠═1805591c-e622-411a-bdf6-0e18cacdac26
 # ╠═1bebd99e-835e-4f4e-aa2d-da367c15c41b
 # ╟─544e23ae-53e1-4c31-b916-5e36543fbfa2
 # ╠═a84c86eb-0043-42cf-bc1d-c457844a6a4a
@@ -3566,6 +3573,8 @@ uuid = "23338594-aafe-5451-b93e-139f81909106"
 # ╟─45c5febc-c73d-48ac-9537-392464a6ff85
 # ╠═940db0bd-a780-434e-9712-62dbd81a8d7a
 # ╠═3f234633-e347-4e1a-ab28-0e6f9b61bdf4
+# ╟─a117795a-335a-48db-abee-5ba58ac370df
+# ╠═9b8867e2-7923-4039-8aa2-3063054e5ee7
 # ╟─58467173-d809-4309-8355-bece040e56e4
 # ╠═8d63730d-229d-40fe-ada1-957d322c22ea
 # ╠═e2eae6ff-de48-49fb-96c6-0e4b947563ca

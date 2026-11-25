@@ -21,6 +21,7 @@ using DiffEqNoiseProcess: WienerProcess
 using StaticArrays: SVector, SMatrix
 using DynamicalSystemsBase: CoupledODEs
 using ChaosTools: fixedpoints, interval, estimate_period
+using StatsBase: rle
 using NonlinearSolve: NewtonRaphson
 using Plots
 using LinearAlgebra
@@ -29,9 +30,10 @@ using Random
 
 export VectorField, ODE_TOL, trajectory, sde_trajectory
 export find_equilibria, classify, saddle_value, is_symmetric
-export saddle_manifolds, manifold_surface, limit_cycle, speed_minima
+export saddle_manifolds, limit_cycle, speed_minima
 export continue_equilibria, bifurcation_chart, complex_equilibrium, cyclic_complex_equilibria
-export STABILITY_MARKERS, CYCLE_COLOR, draw_equilibria!, draw_path!, mesh_lines, phase_figure
+export INK, GREY, PALETTE, STABILITY_MARKERS, CYCLE_COLOR
+export draw_equilibria!, draw_path!, shade_spans!, phase_figure, save_figures
 export σ, dσ, ctrnn_system
 export squared_glv_rates, horchler_parameters
 
@@ -153,47 +155,6 @@ function saddle_manifolds(vf::VectorField, eq, p; duration=75.0, h=1e-4)
         end
     end
     return manifolds
-end
-
-"""
-    manifold_surface(vf, eq, p; direction=:stable, n=48, radius=1e-3, duration=50.0, samples=120, starts=nothing)
-
-A 2-D manifold of `eq` as one matrix per variable (row: a run, column: a time; NaN after a run
-leaves the box), for [`mesh_lines`](@ref). The runs start on a closed curve of `radius` around
-`eq` in the eigenspace (a circle for a complex pair, a square in eigenvector coordinates for two
-real eigenvalues), backward for the stable manifold. With `starts`, points on the manifold, they
-run from those toward `eq` instead and are cut at their closest approach; NaN starts break rings.
-"""
-function manifold_surface(vf::VectorField, eq, p; direction=:stable, n=48, radius=1e-3, duration=50.0, samples=120,
-        starts=nothing)
-    trace(y0, tend) = (Y = trajectory(vf, p, y0, tend; saveat=duration / (samples - 1)).Y[:, 1:min(end, samples)];
-        [Y fill(NaN, size(Y, 1), samples - size(Y, 2))])
-    as_matrices(rows) = [permutedims(reduce(hcat, [r[i, :] for r in rows])) for i in 1:dimension(vf)]
-    function trace_to_eq(y0)
-        any(isnan, y0) && return fill(NaN, dimension(vf), samples)
-        Y = trace(y0, direction == :stable ? duration : -duration)
-        distance = [any(isnan, c) ? Inf : norm(c - eq.y) for c in eachcol(Y)]
-        Y[:, argmin(distance)+1:end] .= NaN
-        return Y
-    end
-    isnothing(starts) || return as_matrices(trace_to_eq.(starts))
-
-    λ, V = eq.eigenvalues, eq.eigenvectors
-    selected = direction == :stable ? findall(l -> real(l) < 0, λ) : findall(l -> real(l) > 0, λ)
-    length(selected) == 2 || error("the $direction manifold is $(length(selected))-dimensional, not 2-D")
-    v = V[:, selected[1]]
-    complex_pair = abs(imag(λ[selected[1]])) > 1e-10
-    a, b = normalize.(complex_pair ? (real.(v), imag.(v)) : (real.(v), real.(V[:, selected[2]])))
-
-    function around(s)   # coefficients of (a, b) around the closed curve, s ∈ [0, 1)
-        complex_pair && return (cos(2π * s), sin(2π * s))
-        side, u = divrem(4s, 1)
-        u = 2u - 1
-        return side == 0 ? (1.0, u) : side == 1 ? (-u, 1.0) : side == 2 ? (-1.0, -u) : (u, -1.0)
-    end
-    tend = direction == :stable ? -duration : duration
-    return as_matrices([trace(eq.y .+ radius .* (c[1] .* a .+ c[2] .* b), tend)
-                        for c in around.(mod.(range(0, 1; length=n + 1), 1))])
 end
 
 # ── Limit cycles ────────────────────────────────────────────────────────────────────────
@@ -324,16 +285,22 @@ end
 
 # ── Plotting ────────────────────────────────────────────────────────────────────────────
 
+"""The colours of every figure: ink, a neutral grey and the palette the modules name their colours from."""
+const INK = "#0b0b0b"
+const GREY = "#9a9a9a"
+const PALETTE = (blue="#2a78d6", orange="#eb6834", green="#1baf7a", yellow="#eda100", pink="#e87ba4",
+    violet="#4a3aa7", red="#e34948")
+
 const STABILITY_MARKERS = (
     stable=(shape=:circle, color=:black, label="stable"),
     unstable=(shape=:circle, color=:white, label="unstable"),
-    saddle=(shape=:diamond, color="#9a9a9a", label="saddle"),
+    saddle=(shape=:diamond, color=GREY, label="saddle"),
     nonhyperbolic=(shape=:star5, color=:black, label="nonhyperbolic"),
 )
 const PHASE_TICKS = ([0, π/2, π, 3π/2, 2π], ["0", "π/2", "π", "3π/2", "2π"])
-const CYCLE_COLOR = "#4a3aa7"
-const UNSTABLE_MANIFOLD_COLOR = "#e34948"
-const STABLE_MANIFOLD_COLOR = "#2a78d6"
+const CYCLE_COLOR = PALETTE.violet
+const UNSTABLE_MANIFOLD_COLOR = PALETTE.red
+const STABLE_MANIFOLD_COLOR = PALETTE.blue
 
 """Plot the columns of `Y`, mapped through `coords`, as a path."""
 function draw_path!(plt, Y; coords=identity, kwargs...)
@@ -354,20 +321,39 @@ function draw_equilibria!(plt, eqs; coords=identity, fill=nothing)
     return plt
 end
 
-"""A surface's coordinate matrices as NaN-separated lines (GR ignores surface transparency): every row and every `ring_every`-th column."""
-function mesh_lines(xyz, ring_every)
-    lines = [[[M[k, :] for k in axes(M, 1)]; [M[:, k] for k in 1:ring_every:size(M, 2)]] for M in xyz]
-    return [reduce(vcat, [[l; NaN] for l in L]) for L in lines]
+"""
+    shade_spans!(plt, t, states, color; alpha)
+
+A span of `color(state)` over each stretch of one state in `states` (a state at each time of
+`t`), half a sample wider each side; none where `color` gives `nothing`.
+"""
+function shade_spans!(plt, t, states, color; alpha)
+    half = (t[2] - t[1]) / 2
+    values, lengths = rle(states)
+    for (state, n, stop) in zip(values, lengths, cumsum(lengths))
+        c = color(state)
+        isnothing(c) || vspan!(plt, [t[stop-n+1] - half, t[stop] + half]; color=c, alpha, linewidth=0, linealpha=0,
+            label=false)
+    end
+    return plt
+end
+
+"""Save each `name => figure` of `figures` in `dir` as PNG and PDF."""
+function save_figures(dir, figures)
+    mkpath(dir)
+    for (name, fig) in figures, extension in (".png", ".pdf")
+        savefig(fig, joinpath(dir, name * extension))
+    end
 end
 
 """
     phase_figure(cyc, distances, labels, colors; ylabel, title)
 
 The speed around a cycle ([`speed_minima`](@ref)) with its bottlenecks in `colors[node]`, the
-`distances` from reference points against phase, and the speed as a colour strip.
+`distances` from reference points against phase.
 """
 function phase_figure(cyc, distances, labels, colors; ylabel, title)
-    fig = plot(layout=grid(3, 1; heights=[0.32, 0.53, 0.15]), size=(850, 700), link=:x, xlims=(0, 2π))
+    fig = plot(layout=grid(2, 1; heights=[0.38, 0.62]), size=(850, 600), link=:x, xlims=(0, 2π))
     blank = (PHASE_TICKS[1], fill("", 5))
     plot!(fig[1], cyc.phase, cyc.speed; color=:black, linewidth=2, label=false, ylabel="speed", title, xticks=blank,
         yscale=:identity)
@@ -378,10 +364,8 @@ function phase_figure(cyc, distances, labels, colors; ylabel, title)
         plot!(fig[2], cyc.phase, d; color, linewidth=2, label)
     end
     d_min, d_max = extrema(reduce(vcat, distances))
-    plot!(fig[2]; ylabel, ylims=(d_min - 0.02, d_max + 0.3 * (d_max - d_min)), legend=:top,
-        legend_columns=length(labels), xticks=blank)
-    heatmap!(fig[3], cyc.phase, [0, 1], repeat(cyc.speed', 2); color=cgrad(["#ece9f8", CYCLE_COLOR, "#1f1752"]),
-        colorbar=false, yticks=([0.5], ["speed"]), xticks=PHASE_TICKS, xlabel="phase")
+    plot!(fig[2]; ylabel, ylims=(d_min - 0.02, d_max + 0.45 * (d_max - d_min)), legend=:top,   # headroom for the legend
+        legend_columns=length(labels), xticks=PHASE_TICKS, xlabel="phase")
     return fig
 end
 

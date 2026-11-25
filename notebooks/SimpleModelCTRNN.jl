@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v1.0.4
+# v1.1.0
 
 using Markdown
 using InteractiveUtils
@@ -46,46 +46,45 @@ For some simulations we use a noisy version of the equation:
 \dot y_i = -y_i + \sigma(y_i) - w_n\, \sigma(y_{i+1}) - w_p\, \sigma(y_{i-1}) + \sqrt{2D}\, Y_i(t)
 ```
 
-where each ``Y_i(t)`` is independent white noise and ``\sqrt{2D} = 0.1``. For all simulations we use the Euler-Maruyama method. For deterministic simulations, set the noise constant to 0.
+where each ``Y_i(t)`` is independent white noise and ``\sqrt{2D} = 0.4`` (``D = 0.08``). This is the same size relative to the range of the outputs ``\sigma(y)`` as the GLV's ``\sqrt{2D} = 0.1`` is relative to its activities: near an active state the slope of ``\sigma`` is about 1/4, so the outputs move by about 0.1. For all simulations we use the Euler-Maruyama method. For deterministic simulations, set the noise constant to 0.
 
-This notebook contains 9 figures:
+This notebook contains 10 figures:
 
-1. a noisy run of the network in the excitable regime;
+1. a noisy run of the network in the multistable regime;
 2. a noisy run of the network in the limit-cycle regime;
-3. a deterministic run of the network in the excitable regime;
+3. a deterministic run of the network in the multistable regime;
 4. a deterministic run of the network in the limit-cycle regime;
-5. the phase portrait of the excitable regime;
+5. the phase portrait of the multistable regime;
 6. the bifurcation chart across ``(w_p, w_n)``;
 7. a figure overlaying the bifurcations over the heatmap;
-8. the limit cycle and its ghosts;
-9. the cycle's speed and its distance from the ghosts.
+8. a panel of figure 7 beside figures 1 and 2;
+9. the limit cycle and its ghosts;
+10. the cycle's speed and its distance from the ghosts.
 """
 
 # ╔═╡ 4070bcdb-b5b9-4521-840c-a60cd020ba9e
 begin
-    excitable = (wp=6.9, wn=15.0)
+    excitable = (wp=7.58, wn=19.0)
     limit_cycle_setting = (wp=5.0, wn=14.0)
 
-    noise = 0.1
+    noise = 0.4  # on the states y; near an active state this moves the outputs σ(y) by about 0.1, as 0.1 does the GLV's activities
     dt = 0.01
     seed = 1
     sample_step = 0.05
     y_start = [0.0, -3.0, -6.0]
-    start_text = "y(0) = $(numbers_text(y_start))"
-    excitable_duration = 100.0
+    start_text = "c(0) = $(numbers_text(y_start))"
+    excitable_duration = 200.0
     limit_cycle_duration = 50.0
-    output_label = "output σ(y)"
 
     outputs(Y) = σ.(Y)
     logit(o) = log.(o ./ (1 .- o))
 
     excitable_name = "CTRNN $(weights_text(excitable))"
     limit_cycle_name = "CTRNN $(weights_text(limit_cycle_setting))"
-    stars = [
-        (p=excitable.wp, n=excitable.wn, label="“excitable” $(weights_text(excitable))", color=STAR_COLORS.excitable),
-        (p=limit_cycle_setting.wp, n=limit_cycle_setting.wn,
-            label="limit cycle $(weights_text(limit_cycle_setting))", color=STAR_COLORS.cycle),
-    ]
+    # A run's outputs against time, titled by its setting and its start.
+    run_plot(run, name; kwargs...) = time_series_plot(run.t, outputs(run.Y); ylabel="output σ(y)",
+        title="$name\n$start_text", kwargs...)
+    stars = setting_stars(excitable, limit_cycle_setting)
     weight_labels = (xlabel="wₚ", ylabel="wₙ")
 end
 
@@ -100,12 +99,10 @@ begin
 end
 
 # ╔═╡ 7ce50d02-8bc1-4140-b032-912615215657
-excitable_noisy_plot = time_series_plot(excitable_noisy.t, outputs(excitable_noisy.Y); ylabel=output_label,
-    title="$excitable_name\nnoise $noise, $start_text")
+excitable_noisy_plot = run_plot(excitable_noisy, excitable_name)
 
 # ╔═╡ efff7d09-da0a-446f-a961-a1e5bc42cd72
-limit_cycle_noisy_plot = time_series_plot(limit_cycle_noisy.t, outputs(limit_cycle_noisy.Y); ylabel=output_label,
-    title="$limit_cycle_name\nnoise $noise, $start_text")
+limit_cycle_noisy_plot = run_plot(limit_cycle_noisy, limit_cycle_name)
 
 # ╔═╡ 5a50a55c-997f-4aa7-95c7-f6121d3273b7
 md"**Deterministic runs** of both settings, from the same start."
@@ -118,22 +115,20 @@ begin
 end
 
 # ╔═╡ 597929a2-9f57-4bb9-b442-9b4c4f3fd9c8
-excitable_deterministic_plot = time_series_plot(excitable_deterministic.t, outputs(excitable_deterministic.Y);
-    ylabel=output_label, title="$excitable_name\ndeterministic, $start_text")
+excitable_deterministic_plot = run_plot(excitable_deterministic, excitable_name; legendfontsize=12)
 
 # ╔═╡ 241b724f-6c5c-40b7-b342-8c8d972c0658
-limit_cycle_deterministic_plot = time_series_plot(limit_cycle_deterministic.t, outputs(limit_cycle_deterministic.Y);
-    ylabel=output_label, title="$limit_cycle_name\ndeterministic, $start_text")
+limit_cycle_deterministic_plot = run_plot(limit_cycle_deterministic, limit_cycle_name; legendfontsize=12)
 
 # ╔═╡ 536fdb84-dbcb-4c37-8547-d0dbf9d1ab7e
-md"**Basins** of the excitable setting's three stable equilibria and its stable limit cycle, in output space: every point of a 41³ grid run without noise and labelled by the attractor it reaches."
+md"**Basins** of the multistable setting's three stable equilibria and its stable limit cycle, in output space: every point of a 41³ grid run without noise and labelled by the attractor it reaches."
 
 # ╔═╡ e699761d-3e82-4353-950f-10792284e44b
 begin
     excitable_equilibria = find_equilibria(ctrnn3, excitable)
     excitable_attractors = sort([e for e in excitable_equilibria if e.stability == :stable]; by=e -> argmax(e.y))
     excitable_symmetric = only(e for e in excitable_equilibria if is_symmetric(e.y))
-    excitable_cycle = limit_cycle(ctrnn3, excitable, excitable_symmetric.y .+ [0.01, 0.0, -0.01]; settle=500.0)
+    excitable_cycle = limit_cycle(ctrnn3, excitable, excitable_symmetric.y .+ OFF_DIAGONAL; settle=500.0)
     excitable_basins = basin_grid(ctrnn3, excitable, [outputs(e.y) for e in excitable_attractors];
         values=range(0.005, 0.85; length=41), inverse=logit, cycle=outputs(excitable_cycle.Y))
     excitable_flows = basin_flows(ctrnn3, excitable, excitable_basins; every=13, duration=60.0,
@@ -141,10 +136,10 @@ begin
 end
 
 # ╔═╡ 3fbf31da-de7b-43d8-a75d-b176bed64521
-basins_plot = basin_portrait(excitable_basins, excitable_equilibria; coords=outputs, lims=(0.0, 0.85),
+basins_plot = plot!(basin_portrait(excitable_basins, excitable_equilibria; coords=outputs, lims=(0.0, 0.85),
     flows=excitable_flows,
-    cycle=outputs(excitable_cycle.Y), camera=(140, 25), axis_note=" output",
-    title="$excitable_name:\n")
+    cycle=outputs(excitable_cycle.Y), camera=(140, 25),
+    title="$excitable_name:\n"); legendfontsize=12, titlefontsize=12)
 
 # ╔═╡ f0bd0c0e-1c67-4ab3-a5de-0c0c5458db6e
 md"**Bifurcation chart** over ``(w_p, w_n) \in [0, 20]^2``: Hopf and fold curves by continuation (BifurcationKit), and the heteroclinic bifurcation where the limit cycle ends, found by bisection."
@@ -175,14 +170,19 @@ begin
     Threads.@threads for k in eachindex(end_wn)
         end_wp[k] = cycle_end(end_wn[k])
     end
+
+    # The curve found and its mirror image, where the ring runs the other way.
+    found = .!isnan.(end_wp)
+    heteroclinic_curves = [(type=:heteroclinic, x=end_wp[found], y=end_wn[found]),
+        (type=:heteroclinic, x=end_wn[found], y=end_wp[found])]
 end
 
 # ╔═╡ 0bfcc3d6-f1de-4b30-ac20-3e4420e3de1d
 chart_plot = let plt = chart_axes(ctrnn_chart; weight_labels..., title="CTRNN bifurcation chart")
-    ok = .!isnan.(end_wp)
-    plot!(plt, end_wp[ok], end_wn[ok]; color="#eda100", linewidth=2, linestyle=:dash,
-        label="heteroclinic bifurcation")
-    plot!(plt, end_wn[ok], end_wp[ok]; color="#eda100", linewidth=2, linestyle=:dash, label=false)
+    for (k, c) in enumerate(heteroclinic_curves)
+        plot!(plt, c.x, c.y; color=PALETTE.yellow, linewidth=2, linestyle=:dash,
+            label=(k == 1 ? "heteroclinic bifurcation" : false))
+    end
     label_regions!(plt, [
         (x=3.6, y=3.5, text="1 stable equilibrium\n(all nodes equal)"),
         (x=3.5, y=16.5, text="haunted limit cycle\nR → P → S"),
@@ -203,14 +203,19 @@ ctrnn_scan = metastability_scan(CTRNN_SCAN; noise, seed, cells=300)
 
 # ╔═╡ dd357563-8ef7-4c00-9237-6df4c1f8cdf4
 overlay_plot = let plt = metastability_heatmap(ctrnn_scan; weight_labels..., color=OVERLAY_COLORS.map,
-        title="CTRNN: fraction of runs metastable, with the bifurcation curves, noise $noise")
-    ok = .!isnan.(end_wp)
-    heteroclinic = [(type=:heteroclinic, x=end_wp[ok], y=end_wn[ok]), (type=:heteroclinic, x=end_wn[ok], y=end_wp[ok])]
-    chart_overlay!(plt, ctrnn_chart; scan=ctrnn_scan, extra=heteroclinic,
+        title="CTRNN Parameter Scan and Bifurcations")
+    chart_overlay!(plt, ctrnn_chart; scan=ctrnn_scan, extra=heteroclinic_curves,
         labels=[(type=:hopf, near=(14.8, 2.6)), (type=:fold, near=(5.6, 12.0)), (type=:fold, near=(18.5, 5.6)),
             (type=:heteroclinic, near=(10.0, 15.5)), (type=:heteroclinic, near=(15.5, 10.0))])
     draw_stars!(plt, stars)
+    plot!(plt; legendfontsize=12)
 end
+
+# ╔═╡ 822790b9-328a-41cf-baf3-2074e409a429
+md"**Panel**: the metastability heatmap with the bifurcation curves (left) beside the noisy runs of the two starred settings (right, multistable above, limit cycle below)."
+
+# ╔═╡ 959299ab-65eb-4897-a7a6-25ff70c31627
+panel_plot = scan_panel(overlay_plot, excitable_noisy_plot, limit_cycle_noisy_plot)
 
 # ╔═╡ dd227763-c369-4beb-90eb-9a2c035790eb
 md"**Ghosts** of the limit-cycle setting: the complex equilibria left past the fold (followed from the fold by complex Newton steps), with the cycle and its speed minima."
@@ -243,10 +248,9 @@ end
 
 # ╔═╡ a574613b-a1b0-4ccb-a27c-963ff28803f7
 ghost_portrait_plot = let
-    plt = plot(; xlabel="Rock output", ylabel="Paper output", zlabel="Scissors output", camera=(125, 30),
-        # A ghost's real output can be just below 0 (Re σ(y) ≈ -2e-4 here).
-        xlims=(-0.01, 0.65), ylims=(-0.01, 0.65), zlims=(-0.01, 0.65), size=(760, 720), legend=:topright, legendfontsize=8,
-        title="$limit_cycle_name: cycle and ghosts", titlefontsize=10)
+    # A ghost's real output can be just below 0 (Re σ(y) ≈ -2e-4 here).
+    plt = plot(; cube_axes((-0.01, 0.65))..., camera=(125, 30), size=(760, 720), legend=:topright, legendfontsize=12,
+        title=limit_cycle_name, titlefontsize=12)
 
     draw_path!(plt, trajectory(ctrnn3, limit_cycle_setting, y_start, 20.0).Y; coords=outputs, color=:gray,
         linewidth=1.5, label="transient from $start_text")
@@ -254,14 +258,19 @@ ghost_portrait_plot = let
         label="limit cycle")
     draw_equilibria!(plt, cycle_equilibria; coords=outputs)
 
+    # Each marker in its node's colour; the legend has one grey example of each kind.
     for m in cycle_speeds.minima
         scatter!(plt, [m.o[1]], [m.o[2]], [m.o[3]]; markershape=:circle, markercolor=RPS_COLORS[m.node],
-            markerstrokecolor=:black, markersize=8, label="$(SIMPLE_NAMES[m.node]) speed minimum")
+            markerstrokecolor=:black, markersize=8, label=false)
     end
     for g in cycle_ghosts
         o = real.(g.o)
         scatter!(plt, [o[1]], [o[2]], [o[3]]; markershape=:hexagon, markercolor=RPS_COLORS[g.node],
-            markerstrokecolor=:black, markersize=8, label="$(SIMPLE_NAMES[g.node]) ghost (real part)")
+            markerstrokecolor=:black, markersize=8, label=false)
+    end
+    for (shape, label) in ((:circle, "slow point"), (:hexagon, "ghost"))
+        scatter!(plt, [NaN], [NaN], [NaN]; markershape=shape, markercolor=GREY, markerstrokecolor=:black,
+            markersize=8, label)
     end
     plt
 end
@@ -270,33 +279,27 @@ end
 md"**Speed and ghost distance** along the limit cycle: the cycle slows down where it passes closest to each ghost."
 
 # ╔═╡ 909107b0-9b64-4975-b239-9557452eba80
-ghost_phase_plot = phase_figure(
-    cycle_speeds,
-    ghost_distances,
-    ["$(SIMPLE_NAMES[g.node]) ghost" for g in cycle_ghosts],
-    RPS_COLORS;
-    ylabel="distance from complex ghost",
-    title="$limit_cycle_name: speed and distance from the ghosts",
-)
+ghost_phase_plot = let
+    fig = phase_figure(cycle_speeds, ghost_distances, ["$(SIMPLE_NAMES[g.node]) ghost" for g in cycle_ghosts], RPS_COLORS;
+        ylabel="distance from ghost", title=limit_cycle_name)
+    # Square, with larger text.
+    plot!(fig; size=(720, 720), titlefontsize=18, guidefontsize=16, tickfontsize=13, legendfontsize=13,
+        left_margin=4Plots.mm, right_margin=4Plots.mm, bottom_margin=2Plots.mm)
+end
 
 # ╔═╡ 6a37dffb-50dd-45f2-822d-6cc56d626cf0
-begin
-    figure_dir = joinpath(@__DIR__, "..", "figures")
-    mkpath(figure_dir)
-    for (name, fig) in (
-        "simple_ctrnn_stochastic_excitable" => excitable_noisy_plot,
-        "simple_ctrnn_stochastic_limit_cycle" => limit_cycle_noisy_plot,
-        "simple_ctrnn_deterministic_excitable" => excitable_deterministic_plot,
-        "simple_ctrnn_deterministic_limit_cycle" => limit_cycle_deterministic_plot,
-        "simple_ctrnn_basins" => basins_plot,
-        "simple_ctrnn_bifurcation_chart" => chart_plot,
-        "simple_ctrnn_heatmap_bifurcations" => overlay_plot,
-        "simple_ctrnn_ghost_portrait" => ghost_portrait_plot,
-        "simple_ctrnn_ghost_phase" => ghost_phase_plot,
-    ), extension in (".png", ".pdf")
-        savefig(fig, joinpath(figure_dir, name * extension))
-    end
-end
+save_figures(joinpath(@__DIR__, "..", "figures"), (
+    "simple_ctrnn_stochastic_excitable" => excitable_noisy_plot,
+    "simple_ctrnn_stochastic_limit_cycle" => limit_cycle_noisy_plot,
+    "simple_ctrnn_deterministic_excitable" => excitable_deterministic_plot,
+    "simple_ctrnn_deterministic_limit_cycle" => limit_cycle_deterministic_plot,
+    "simple_ctrnn_basins" => basins_plot,
+    "simple_ctrnn_bifurcation_chart" => chart_plot,
+    "simple_ctrnn_heatmap_bifurcations" => overlay_plot,
+    "simple_ctrnn_panel" => panel_plot,
+    "simple_ctrnn_ghost_portrait" => ghost_portrait_plot,
+    "simple_ctrnn_ghost_phase" => ghost_phase_plot,
+))
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -338,7 +341,7 @@ StochasticDiffEq = "~7.2.0"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.3"
+julia_version = "1.13.4"
 manifest_format = "2.1"
 project_hash = "75ef2802caf0f65f8af342bdbe43755bf999b4fd"
 
@@ -2007,7 +2010,7 @@ version = "1.11.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2026.10.20"
+version = "2026.11.5"
 
 [[deps.MuladdMacro]]
 deps = ["PrecompileTools"]
@@ -2173,7 +2176,7 @@ version = "0.3.34+0"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.30+0"
+version = "0.3.30+1"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
@@ -3580,7 +3583,7 @@ version = "2023.1.0+0"
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.8.3+0"
+version = "17.8.5+0"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -3630,6 +3633,8 @@ uuid = "23338594-aafe-5451-b93e-139f81909106"
 # ╟─0906bd33-8039-4654-814c-3c5fb34c8d4a
 # ╠═1cef12da-cae3-43d5-80d0-cd707a3f41aa
 # ╠═dd357563-8ef7-4c00-9237-6df4c1f8cdf4
+# ╟─822790b9-328a-41cf-baf3-2074e409a429
+# ╠═959299ab-65eb-4897-a7a6-25ff70c31627
 # ╟─dd227763-c369-4beb-90eb-9a2c035790eb
 # ╠═55d59d75-bfdd-4444-b3c6-84368fe2a8eb
 # ╠═35aaaf79-f9bc-4747-8b0c-75193a8900af

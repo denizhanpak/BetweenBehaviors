@@ -6,7 +6,7 @@ versions it was run with.
 
 | Notebook | Figures (`figures/`) |
 |---|---|
-| `notebooks/FittedModel.jl` | `exp_data` (a worm's forward and reverse command-neuron activity and its velocity), `fitted_model` (time series of the fitted CTRNN and heteroclinic network), `fitted_dwell_times` (dwell times of Roberts et al.'s worms and of the two models) |
+| `notebooks/FittedModel.jl` | `exp_data` (a worm's forward and reverse command-neuron activity and its velocity), `fitted_model` (time series of the fitted CTRNN and heteroclinic network), `fitted_dt` (both models at five Euler–Maruyama step sizes), `fitted_dwell_times` (dwell times of Roberts et al.'s worms and of the two models) |
 | `notebooks/SimpleModelGLV.jl` | the 3-node GLV: noisy and deterministic time series of the excitable and heteroclinic settings, basins of the excitable setting, the heteroclinic phase portrait, the bifurcation chart, the metastability heatmap with the bifurcation curves, and the saddle-value figure |
 | `notebooks/SimpleModelCTRNN.jl` | the 3-node CTRNN: noisy and deterministic time series of the excitable and limit-cycle settings, basins of the excitable setting, the bifurcation chart, the metastability heatmap with the bifurcation curves, the limit cycle with its ghosts, and its speed and distance from the ghosts |
 
@@ -28,8 +28,8 @@ noisy runs) take a few minutes on 8 threads; everything else takes seconds to a 
 - `src/`: the modules the notebooks `include`.
   - `Common.jl` (all three notebooks): the model-independent tools (equilibria by ChaosTools'
     interval root finding, manifolds, limit cycles, continuation with BifurcationKit, ghosts,
-    and noisy runs with StochasticDiffEq's Euler–Maruyama), plus the CTRNN field and Horchler et
-    al.'s heteroclinic network.
+    and noisy runs with StochasticDiffEq's Euler–Maruyama), the colours and plotting helpers
+    the figures share, plus the CTRNN field and Horchler et al.'s heteroclinic network.
   - `SimpleModels.jl` (the two simple-model notebooks): the 3-node rings and their figures. The
     basins are computed by Attractors.jl and their boundaries drawn with Meshing.jl.
   - `FittedModels.jl` (FittedModel): Roberts et al.'s dwell times, the two fits and their
@@ -52,8 +52,10 @@ noisy runs) take a few minutes on 8 threads; everything else takes seconds to a 
   `data/wormwideweb/` the first time `FittedModel.jl` runs; one of them is shown in `exp_data`.
 
 Both fits are saved, so the figures do not rerun them. To refit, set `refit = true` in
-`FittedModel.jl`: each model is refitted from its saved fit. This takes an hour or more and
-overwrites the two fit files.
+`FittedModel.jl`: each model is fitted anew from its design rule, the CTRNN from just past the
+SNIC (`snic_start`) and the heteroclinic network from Horchler et al.'s design at noise 0.3
+(`horchler_design`). This takes an hour or more and overwrites the two fit files. The saved fits
+were made in the two stages described above, so a new fit will not reproduce them exactly.
 
 ## Notes
 

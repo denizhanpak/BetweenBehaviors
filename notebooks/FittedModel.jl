@@ -42,27 +42,25 @@ fitted to the dwell times of Roberts et al.'s (2016) wild-type worms in Forward 
 Reverse → Pause 2 (their Table 1 means, with SDs equal to the means as the exponential dwell
 times of their Markov model imply), each run with noise:
 
-- a 2-node CTRNN whose behaviour is read from which node's output is above ½, Roberts et al.'s two
-  command units. Its fit starts just past the saddle-node on invariant circle (SNIC) bifurcation
-  of an excitable network, where the network begins to oscillate, and prefers networks that
-  oscillate without noise; its noise is fitted too;
-- a 4-state heteroclinic network (generalized Lotka–Volterra, Horchler's construction), whose fit
-  starts from Horchler et al.'s (2015) design rule; its rates and the noise on each node are
-  fitted.
+- a 2-node CTRNN whose behaviour is read from which node's output is above ½, it is fitted to the table from Roberts et al.;
+- a 4-state heteroclinic network, whose fit
+  starts from Horchler et al.'s (2015) design rule; its rates and the noise on each node are fitted to the table from Roberts et al.
 
-The fitted parameters are read from `data/`; `refit = true` below refits both models from the
-saved fits (CMA-ES, an hour or more) and overwrites those files. The WormWideWeb recordings (~0.5 GB) are downloaded to
+The fitted parameters are read from `data/`
+
+`refit = true` below fits both models anew, each from its design rule (CMA-ES, an hour or more), and overwrites those
+files. The WormWideWeb recordings (~0.5 GB) are downloaded to
 `data/wormwideweb` on the first run. The last cell saves the figures to `figures/`.
 """
 
 # ╔═╡ 2d976b02-0f04-4b06-9dbe-6bb53ca2a8d5
 begin
-    sample_dt = 1 / ROBERTS_RATE        # both models are read every video frame, as Roberts et al.'s worms
-    ctrnn_dt = 1 / (6 * ROBERTS_RATE)   # Euler–Maruyama steps (s), as in the fits
-    glv_dt = 1 / (20 * ROBERTS_RATE)
-    duration = 2000.0                   # s kept, every run of either model
+    sample_dt = 1 / ROBERTS_RATE  # sampled at the framerate of Roberts et al.
+    em_dt = 1 / (10 * ROBERTS_RATE) # dt for the Euler-Maruyama algorithm, both models
+    duration = 2000.0        # s kept, every run of either model
     run_seeds = 1:10
     data_dir = joinpath(@__DIR__, "..", "data")
+    trace_colors = [FORWARD, PALETTE.yellow]   # the forward and the reverse trace, of the worm and of the CTRNN
 end
 
 # ╔═╡ 4089f088-e764-435c-96a2-65ec6fc91dab
@@ -79,21 +77,20 @@ begin
     data_t = (shown .- 1) .* worm.dt
     data_activity = permutedims(hcat(cluster_activity(worm, COMMAND_CLASSES.forward, worm_frames)[shown],
         cluster_activity(worm, ["AVE"], worm_frames)[shown]))
-    data_velocity = worm.behavior["velocity"][worm_frames[shown]]
+    data_velocity = worm.velocity[worm_frames[shown]]
     data_states = [v > PAUSE_SPEED ? :forward : v < -PAUSE_SPEED ? :reversal : :pause for v in data_velocity]
 end
 
 # ╔═╡ f5be20db-06f2-4621-839b-5e16da076ca8
-data_plot = behavior_figure(data_t, data_activity, data_velocity; trace_labels=["AVB", "AVE"],
-    trace_colors=[FORWARD, "#eda100"], activity_states=data_states)
+data_plot = behavior_figure(data_t, data_activity, data_velocity; trace_labels=["AVB", "AVE"], trace_colors,
+    activity_states=data_states)
 
 # ╔═╡ 6d03b3eb-5dd1-47c1-a099-ebc4cfd65111
 md"""
 **Fits.** Both models are fitted to the mean and SD of Roberts et al.'s dwell times
-(`dwell_loss`: Σ log² of model over data, means and SDs). `refit = true` refits both models,
-each from its saved fit.
-Below the fits, each model's dwell times against the target and its loss, and the CTRNN's
-period without noise.
+(`dwell_loss`: Σ log² of model over data, means and SDs). `refit = true` fits both models anew:
+the CTRNN from just past the saddle-node on invariant circle bifurcation of an excitable network
+(`snic_start`), the heteroclinic network from Horchler et al.'s design rule (`horchler_design`).
 """
 
 # ╔═╡ b3d8c802-0bbe-4520-818d-11787371a23f
@@ -102,39 +99,29 @@ begin
     target = roberts_target()
 
     ctrnn_fit_file = joinpath(data_dir, "CTRNNRobertsFit.txt")
-    refit && ctrnn_dwell_fit(ctrnn_fit_file, target; start=read_ctrnn_genome(ctrnn_fit_file))
-    net = read_ctrnn_fit(ctrnn_fit_file)
+    net = ctrnn_dwell_fit(; file=ctrnn_fit_file, target, refit)
 
     glv_fit_file = joinpath(data_dir, "HorchlerRobertsFit.txt")
-    glv = horchler_dwell_fit(; file=glv_fit_file, target, start=read_horchler_fit(glv_fit_file), refit)
+    glv = horchler_dwell_fit(; file=glv_fit_file, target, refit)
 end
-
-# ╔═╡ 494e8988-0009-4aae-a925-368bb4820dc5
-fit_check = let
-    c, g = ctrnn_dwell(net), horchler_dwell(glv.α, glv.noise)
-    cycle = noise_free_cycle(net)
-    (; ctrnn_loss=dwell_loss(c, target), glv_loss=dwell_loss(g, target),
-        ctrnn_period=isnothing(cycle) ? NaN : cycle_period(cycle, net.θ),
-        states=[(; state, data_mean, data_sd, ctrnn_mean=round(c.mean[b]; digits=3), ctrnn_sd=round(c.sd[b]; digits=3),
-                 glv_mean=round(g.mean[b]; digits=3), glv_sd=round(g.sd[b]; digits=3))
-                for (b, (state, data_mean, data_sd)) in enumerate(zip(CYCLE_STATES, target.mean, round.(target.sd; digits=3)))])
-end
-
-# ╔═╡ a8a5e343-0eba-4f0c-a9af-072f04b19018
-# The worms' mean velocity in each state, which turns the heteroclinic network's states into a velocity.
-state_velocity = mean_state_velocities(filter(r -> !("heat" in r.types), all_recordings); pause_speed=PAUSE_SPEED)
 
 # ╔═╡ 6ad12619-3740-4a47-992c-d4ae93f80c90
 begin
     # Both models' runs, read every frame: the CTRNN's behaviour from its outputs (`ctrnn_labels`),
     # the heteroclinic network's from its largest node (`horchler_labels`).
-    ctrnn_runs = [ctrnn_noisy_run(net, seed; sample_dt, dt=ctrnn_dt, transient=50.0, duration) for seed in run_seeds]
-    glv_runs = [horchler_noisy_run(glv.α, seed; noise=glv.noise, sample_dt, dt=glv_dt, transient=20.0, duration)
+    ctrnn_runs = [ctrnn_noisy_run(net, seed; sample_dt, dt=em_dt, transient=TRANSIENT, duration) for seed in run_seeds]
+    glv_runs = [horchler_noisy_run(glv.α, seed; noise=glv.noise, sample_dt, dt=em_dt, transient=TRANSIENT, duration)
                 for seed in run_seeds]
     ctrnn_dwell_runs = label_dwell([ctrnn_labels(r.Y, net) for r in ctrnn_runs], sample_dt)
     glv_dwell_runs = label_dwell([horchler_labels(r.Y) for r in glv_runs], sample_dt)
-    ctrnn_noise_text = "noise ($(join(round.(net.noise; digits=2), ", ")))"
-    glv_noise_text = "noise ($(join(round.(glv.noise; digits=2), ", ")))"
+
+    # Each run's random initial state, drawn from its seed; the first TRANSIENT s are dropped.
+    println("Initial states, random per seed (first $(TRANSIENT) s of each run dropped):")
+    println("  CTRNN y₀ = (y_F, y_R), each node ~ Normal(0, 1)")
+    println("  GLV   u₀ = (u_F, u_P1, u_R, u_P2), each node ~ Uniform(0, 1)")
+    for (seed, c, g) in zip(run_seeds, ctrnn_runs, glv_runs)
+        println("  seed ", lpad(seed, 2), ":  CTRNN y₀ = ", round.(c.y0; digits=3), "   GLV u₀ = ", round.(g.y0; digits=3))
+    end
 end
 
 # ╔═╡ bc9f2269-d8c8-484d-b486-d92b23e74061
@@ -142,21 +129,46 @@ md"**Fitted models**: the CTRNN's states (z-scored) and the heteroclinic network
 
 # ╔═╡ 734b7a0a-8669-46a6-933f-1c7cc526eca7
 model_plot = let
-    shade = [:forward, :pause, :reversal, :pause]   # Forward, Pause 1, Reverse, Pause 2
     c, g = first(ctrnn_runs), first(glv_runs)
     ct, gt = c.t .- first(c.t), g.t .- first(g.t)
     # Plotted at the example worm's frame step, as its traces above; the dwell times use every frame.
     step = round(Int, worm.dt / sample_dt)
     cw, gw = filter(i -> ct[i] <= 240, 1:step:length(ct)), filter(i -> gt[i] <= 240, 1:step:length(gt))
     Z = permutedims(hcat(zscore(c.Y[1, :]), zscore(c.Y[2, :])))
-    v = state_velocity.forward .* g.Y[1, :] .^ 2 .+ state_velocity.reverse .* g.Y[3, :] .^ 2
-    behavior_figure(ct[cw], Z[:, cw], v[gw]; velocity_t=gt[gw],
-        trace_labels=["Forward", "Reverse"], trace_colors=[FORWARD, "#eda100"],
-        activity_states=shade[ctrnn_labels(c.Y[:, cw], net)],
-        velocity_states=shade[horchler_labels(g.Y[:, gw])],
+    behavior_figure(ct[cw], Z[:, cw], horchler_velocity(g.Y)[gw]; velocity_t=gt[gw],
+        trace_labels=["Forward", "Reverse"], trace_colors,
+        activity_states=CYCLE_SHADES[ctrnn_labels(c.Y[:, cw], net)],
+        velocity_states=CYCLE_SHADES[horchler_labels(g.Y[:, gw])],
         activity_ylabel="state y (z-score)",
-        activity_title="2-node CTRNN, $ctrnn_noise_text",
-        velocity_title="4-state GLV, $glv_noise_text")
+        activity_title="Neural Model (CTRNN)",
+        velocity_title="Behavioral Model (GLV)")
+end
+
+# ╔═╡ a05a52d4-5f79-40d9-8d75-8b756b07fec2
+md"**Step size**: the heteroclinic network's velocity (left) and the CTRNN's states (z-scored, right), first 240 s of seed 1 with Euler–Maruyama steps dt = 0.1 s halved down to 0.00625 s, each shaded by its own behaviour. Each run is read every frame, or every step when a step is longer than a frame. The noise is drawn per step, so each row is a different noise realisation."
+
+# ╔═╡ c8cc720f-207f-4b9a-8f94-6241e229c836
+dt_plot = let
+    dts = 0.1 ./ 2 .^ (0:4)
+    shown = 240.0
+    panels = map(dts) do dt
+        # Each run read every frame, or every step when a step is longer than a frame.
+        run = (; sample_dt=max(dt, sample_dt), dt, transient=TRANSIENT, duration=shown)
+        g = horchler_noisy_run(glv.α, 1; noise=glv.noise, run...)
+        c = ctrnn_noisy_run(net, 1; run...)
+        # Titles on the first row only, the time axis on the last.
+        last_row = dt == last(dts)
+        row(title) = (; title=(dt == first(dts) ? title : ""), xlabel=(last_row ? "time (s)" : ""),
+            xformatter=(last_row ? :auto : _ -> ""), linewidth=1.5)
+        (behavior_panel(g.t .- first(g.t), [horchler_velocity(g.Y)], [INK], CYCLE_SHADES[horchler_labels(g.Y)];
+                ylabel="dt = $(dt) s\nvelocity (mm/s)", row("Behavioral Model (GLV)")...),
+            behavior_panel(c.t .- first(c.t), zscore.(eachrow(c.Y)), trace_colors, CYCLE_SHADES[ctrnn_labels(c.Y, net)];
+                ylabel="state y (z-score)", row("Neural Model (CTRNN)")...))
+    end
+    # The legend gets a row of its own above the panels, as in the figures above.
+    legend_row = behavior_legend(["GLV velocity", "CTRNN Forward", "CTRNN Reverse"], [INK; trace_colors])
+    plot(legend_row, Iterators.flatten(panels)...; layout=@layout([a{0.03h}; grid(5, 2)]), size=(1400, 1250),
+        xlims=(0, shown), left_margin=6Plots.mm, bottom_margin=2Plots.mm)
 end
 
 # ╔═╡ 742edc44-75f1-42ea-9c34-9e2de4c4ea8b
@@ -166,22 +178,19 @@ md"""
 2000 s read every frame.
 """
 
-# ╔═╡ a7efc3d5-4218-4758-9ed6-c1e5b6f00ae7
-roberts = (; mean=target.mean, sd=target.sd)
-
 # ╔═╡ 3276b13a-0b41-4f89-8939-c84bc05f3ced
 dwell_plot = let
     systems = [
-        ("Roberts et al. 2016: Data", roberts, "#0b0b0b", :diamond),
-        ("Neural Model, $ctrnn_noise_text", ctrnn_dwell_runs, "#e87ba4", :rect),
-        ("Behavioral Model, $glv_noise_text", glv_dwell_runs, CYCLE_COLOR, :circle),
+        ("Roberts et al. 2016: Data", target, INK, :diamond),
+        ("Behavioral Model", glv_dwell_runs, CYCLE_COLOR, :circle),
+        ("Neural Model", ctrnn_dwell_runs, PALETTE.pink, :rect),
     ]
     marker(color, shape) = (; markershape=shape, markersize=4.5, markercolor=:white, markerstrokecolor=color,
         markerstrokewidth=2)
     panels = map(1:4) do b
         top = 1.1 * maximum(d.mean[b] + d.sd[b] for (_, d) in systems)
         panel = plot(; title=CYCLE_STATES[b], titlefontsize=10,
-            xticks=(1:3, ["worms", "CTRNN", "GLV"]), xlims=(0.4, 3.6), ylims=(0, top),
+            xticks=(1:3, ["worms", "GLV", "CTRNN"]), xlims=(0.4, 3.6), ylims=(0, top),
             legend=false, ylabel=(b == 1 ? "dwell time (s), mean ± SD" : ""))
         for (k, (_, d, color, shape)) in enumerate(systems)
             low, high = d.mean[b] - d.sd[b], d.mean[b] + d.sd[b]
@@ -202,17 +211,12 @@ dwell_plot = let
 end
 
 # ╔═╡ 5b0e2c6d-8f3a-4c1e-9d7b-2a4f6e8c0b13
-begin
-    figure_dir = joinpath(@__DIR__, "..", "figures")
-    mkpath(figure_dir)
-    for (name, fig) in (
-        "exp_data" => data_plot,
-        "fitted_model" => model_plot,
-        "fitted_dwell_times" => dwell_plot,
-    ), extension in (".png", ".pdf")
-        savefig(fig, joinpath(figure_dir, name * extension))
-    end
-end
+save_figures(joinpath(@__DIR__, "..", "figures"), (
+    "exp_data" => data_plot,
+    "fitted_model" => model_plot,
+    "fitted_dt" => dt_plot,
+    "fitted_dwell_times" => dwell_plot,
+))
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -3551,13 +3555,12 @@ uuid = "23338594-aafe-5451-b93e-139f81909106"
 # ╠═f5be20db-06f2-4621-839b-5e16da076ca8
 # ╟─6d03b3eb-5dd1-47c1-a099-ebc4cfd65111
 # ╠═b3d8c802-0bbe-4520-818d-11787371a23f
-# ╠═494e8988-0009-4aae-a925-368bb4820dc5
-# ╠═a8a5e343-0eba-4f0c-a9af-072f04b19018
 # ╠═6ad12619-3740-4a47-992c-d4ae93f80c90
 # ╟─bc9f2269-d8c8-484d-b486-d92b23e74061
 # ╠═734b7a0a-8669-46a6-933f-1c7cc526eca7
+# ╟─a05a52d4-5f79-40d9-8d75-8b756b07fec2
+# ╠═c8cc720f-207f-4b9a-8f94-6241e229c836
 # ╟─742edc44-75f1-42ea-9c34-9e2de4c4ea8b
-# ╠═a7efc3d5-4218-4758-9ed6-c1e5b6f00ae7
 # ╠═3276b13a-0b41-4f89-8939-c84bc05f3ced
 # ╠═5b0e2c6d-8f3a-4c1e-9d7b-2a4f6e8c0b13
 # ╟─00000000-0000-0000-0000-000000000001
